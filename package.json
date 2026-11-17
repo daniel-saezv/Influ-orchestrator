@@ -1,0 +1,13 @@
+{
+  "name": "influ-poc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "POC Fase 1 — sistema autónomo de producción y publicación (SIMULADA) para influencer virtual. Arquitectura hexagonal sobre Cloudflare Workers + D1 + KV.",
+  "scripts": {
+    "test:unit": "node --test tests/unit/*.test.mjs",
+    "test:acceptance": "node tests/acceptance/run.mjs",
+    "build:deploy": "node deploy/build.mjs"
+  },
+  "engines": { "node": ">=22" }
+}

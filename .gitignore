@@ -1,0 +1,8 @@
+node_modules/
+.secrets/
+*.env
+.env*
+!.env.example
+deploy/out/
+reports/raw/
+.dev.vars

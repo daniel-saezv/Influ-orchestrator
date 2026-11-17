@@ -1,0 +1,62 @@
+{
+  "batch_id": "LOTE-0001",
+  "title": "Lúa — Semana 47: trucos urbanos y rutinas (YouTube Shorts)",
+  "persona": "Lúa (influencer virtual, contenido sintético generado con IA)",
+  "notes": "Primer lote de ejemplo de la POC. Vídeos de 8 s 720x1280 generados a partir de imágenes IA + rótulos (sin voz).",
+  "publications": [
+    {
+      "seq": 1,
+      "platform": "youtube",
+      "content_type": "short_video",
+      "media": { "path": "media/P01_fotos_nocturnas.mp4", "mime": "video/mp4" },
+      "copy": {
+        "title": "3 trucos para fotos de noche con el móvil 🌙 #shorts",
+        "description": "Desde una azotea de Madrid: 1) apoya el móvil y usa el temporizador, 2) baja la exposición para no quemar las luces, 3) limpia la lente antes de disparar. ¿Cuál vas a probar esta noche?\n\nLúa es una creadora virtual: este vídeo es contenido sintético generado con IA.",
+        "caption": "Tres trucos rápidos para que tus fotos nocturnas dejen de salir movidas o quemadas. Guárdalo para tu próxima salida 📸",
+        "tags": ["fotografía móvil", "fotos de noche", "trucos foto", "Madrid", "Lúa"],
+        "hashtags": ["#shorts", "#fotografiamovil", "#fotosdenoche", "#madrid", "#trucos"],
+        "category_id": "26",
+        "privacy_status": "public",
+        "made_for_kids": false,
+        "contains_synthetic_media": true
+      },
+      "scheduled_at": "2026-11-19T18:00:00+01:00"
+    },
+    {
+      "seq": 2,
+      "platform": "youtube",
+      "content_type": "short_video",
+      "media": { "path": "media/P02_rutina_manana.mp4", "mime": "video/mp4" },
+      "copy": {
+        "title": "Mi rutina de mañana en 30 segundos ☕ #shorts",
+        "description": "Café, cuaderno y diez minutos sin pantallas antes de empezar el día. Mi rutina para arrancar con calma en Madrid.\n\nLúa es una creadora virtual: este vídeo es contenido sintético generado con IA.",
+        "caption": "Mi ritual de cada mañana: café, cuaderno y 10 minutos sin móvil. ¿Cómo empiezas tú el día? ☕",
+        "tags": ["rutina de mañana", "productividad", "café", "hábitos", "Lúa"],
+        "hashtags": ["#shorts", "#rutinademañana", "#habitos", "#productividad", "#cafe"],
+        "category_id": "22",
+        "privacy_status": "public",
+        "made_for_kids": false,
+        "contains_synthetic_media": true
+      },
+      "scheduled_at": "2026-11-20T08:30:00+01:00"
+    },
+    {
+      "seq": 3,
+      "platform": "youtube",
+      "content_type": "short_video",
+      "media": { "path": "media/P03_escritorio_minimalista.mp4", "mime": "video/mp4" },
+      "copy": {
+        "title": "Escritorio minimalista: 5 claves 🪴 #shorts",
+        "description": "Las 5 claves de mi escritorio: superficie despejada, luz cálida, una planta, cables ocultos y solo lo que uso a diario.\n\nLúa es una creadora virtual: este vídeo es contenido sintético generado con IA.",
+        "caption": "Menos cosas, más foco. Mis 5 claves para un escritorio minimalista que invita a trabajar 🪴",
+        "tags": ["escritorio minimalista", "setup", "organización", "home office", "Lúa"],
+        "hashtags": ["#shorts", "#minimalismo", "#setup", "#homeoffice", "#organizacion"],
+        "category_id": "26",
+        "privacy_status": "public",
+        "made_for_kids": false,
+        "contains_synthetic_media": true
+      },
+      "scheduled_at": "2026-11-21T19:00:00+01:00"
+    }
+  ]
+}
