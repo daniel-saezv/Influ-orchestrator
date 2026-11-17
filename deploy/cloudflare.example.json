@@ -14,7 +14,9 @@
     "DEPLOY_ENV": "poc",
     "RATE_LIMIT_ENABLED": "true",
     "RATE_LIMIT_HEALTH_PER_MINUTE": "120",
-    "RATE_LIMIT_ANON_PER_MINUTE": "60"
+    "RATE_LIMIT_ANON_PER_MINUTE": "60",
+    "ACCESS_TEAM_DOMAIN": "<tu-equipo>.cloudflareaccess.com",
+    "ACCESS_AUD": "<application-audience-tag-de-access>"
   },
   "secrets": ["BOT_HMAC_SECRET", "APPROVER_HMAC_SECRET"]
 }

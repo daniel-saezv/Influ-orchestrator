@@ -2,6 +2,7 @@
 // requestBatchChanges, getPublicationResults...). Firma cada petición con HMAC-SHA256.
 // Independiente del transporte: `transport` puede ser fetch real o un Worker en memoria (tests).
 import { createHmac, createHash, randomBytes } from 'node:crypto';
+import { accessHeadersFromEnv } from './access-headers.mjs';
 
 export function sign({ secret, keyId, method, pathAndQuery, body }) {
   const ts = String(Math.floor(Date.now() / 1000));
@@ -15,18 +16,19 @@ export function sign({ secret, keyId, method, pathAndQuery, body }) {
 }
 
 export class OrchestratorClient {
-  constructor({ baseUrl, botSecret, approverSecret, transport = globalThis.fetch }) {
+  constructor({ baseUrl, botSecret, approverSecret, transport = globalThis.fetch, accessHeaders }) {
     Object.assign(this, { baseUrl: baseUrl.replace(/\/$/, ''), transport });
     // Los secretos quedan en propiedades no enumerables para que nunca se impriman por accidente.
     Object.defineProperty(this, 'secrets', { value: { bot: botSecret, approver: approverSecret }, enumerable: false });
+    Object.defineProperty(this, 'accessHeaders', { value: accessHeaders ?? accessHeadersFromEnv(), enumerable: false });
   }
 
   async call(method, path, { body, keyId = 'bot', raw, contentType, headers = {}, signOverride } = {}) {
     const bytes = raw ?? (body !== undefined ? Buffer.from(JSON.stringify(body)) : undefined);
-    const secret = this.secrets[keyId];
+    const secret = keyId === 'none' ? undefined : this.secrets[keyId];
     const auth = signOverride ?? (secret ? sign({ secret, keyId, method, pathAndQuery: path, body: bytes }) : {});
     const res = await this.transport(this.baseUrl + path, {
-      method, body: bytes, headers: { ...(bytes ? { 'content-type': contentType ?? 'application/json' } : {}), ...auth, ...headers },
+      method, body: bytes, headers: { ...this.accessHeaders, ...(bytes ? { 'content-type': contentType ?? 'application/json' } : {}), ...auth, ...headers },
     });
     const text = await res.text();
     let json; try { json = JSON.parse(text); } catch { json = { ok: false, error: { code: 'NON_JSON', message: text.slice(0, 200) } }; }

@@ -10,6 +10,8 @@ import { D1MockProviderStore } from './adapters/repository/d1-mock-provider-stor
 import { KvMediaStorage } from './adapters/storage/kv-media-storage.js';
 import { verifyRequest } from './adapters/http/auth.js';
 import { applyHttpRateLimit, isAuthenticatedAttempt, purgeOldRateWindows } from './adapters/http/rate-limit.js';
+import { verifyAccessJwt, teamDomainHostname } from './adapters/http/access-jwt.js';
+import { allowEgressHost } from './adapters/http/egress-guard.js';
 import { installEgressGuard, drainEgressAttempts } from './adapters/http/egress-guard.js';
 import { receiveBatch } from './workflows/wf01-receive-batch.js';
 import { decideBatch } from './workflows/wf02-approve-batch.js';
@@ -75,6 +77,10 @@ export default {
     const url = new URL(request.url);
     const repo = new D1Repository(env.DB);
     try {
+      const certHost = teamDomainHostname(env);
+      if (certHost) allowEgressHost(certHost);
+      await verifyAccessJwt(request, env);
+
       if (request.method === 'GET' && url.pathname === '/v1/health') {
         await applyHttpRateLimit(request, env, { scope: 'health' });
         let mode;
