@@ -2,8 +2,11 @@
 // (la API de Cloudflare se usa vía conector; no hay token local). Salida: deploy/out/*.js (ignorado por git).
 //   node deploy/build.mjs worker    -> deploy/out/deploy-worker.js   (sube el Worker + bindings + cron + workers.dev)
 //   node deploy/build.mjs migrate   -> deploy/out/migrate.js         (aplica migrations/*.sql en D1)
-//   node deploy/build.mjs secrets   -> deploy/out/secrets.js         (genera secretos nuevos, los guarda en
-//                                       ~/.config/influ-poc/secrets.json con permisos 600 y los sube como Secrets)
+//   node deploy/build.mjs secrets   -> LEGACY: genera claves aleatorias locales (y opcionalmente deploy/out/secrets.js
+//                                       vía MCP). Los Secrets del Worker (BOT_HMAC_SECRET / APPROVER_HMAC_SECRET)
+//                                       deben configurarse manualmente en el panel de Cloudflare o con
+//                                       `wrangler secret put`. El CLI del bot usa INFLU_BOT_HMAC_SECRET,
+//                                       INFLU_APPROVER_HMAC_SECRET e INFLU_BASE_URL (secretos del entorno del bot).
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, chmodSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,7 +77,8 @@ if (what === 'worker') {
   return out;
 }`;
   writeFileSync(join(OUT, 'secrets.js'), code, { mode: 0o600 });
-  console.log(`Secretos guardados en ${file} (600). Script: deploy/out/secrets.js — bórralo tras ejecutarlo.`);
+  console.log(`Claves locales en ${file} (600). Script legacy: deploy/out/secrets.js — bórralo tras usarlo.`);
+  console.log('Configura BOT_HMAC_SECRET y APPROVER_HMAC_SECRET en el panel de Cloudflare (o wrangler secret put); exporta INFLU_* en el entorno del bot.');
 } else {
   console.log('Uso: node deploy/build.mjs worker|migrate|secrets [base_url]');
 }
