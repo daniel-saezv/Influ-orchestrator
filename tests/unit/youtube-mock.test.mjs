@@ -8,7 +8,7 @@ import { MemoryStore } from '../../src/adapters/repository/d1-mock-provider-stor
 import { SOCIAL_PUBLISHER_METHODS } from '../../src/core/ports/social-publisher.js';
 import { mp4Bytes, samplePost } from '../helpers/sample.mjs';
 
-const VIDEO = mp4Bytes(new URL('../../content/batches/LOTE-0001/media/P01_fotos_nocturnas.mp4', import.meta.url));
+const VIDEO = mp4Bytes(new URL('../../tests/fixtures/lote-0001-media/P01_fotos_nocturnas.mp4', import.meta.url));
 const post = (o = {}) => samplePost({ media: { ...samplePost().media, size_bytes: VIDEO.length }, ...o });
 const media = { bytes: VIDEO, mime: 'video/mp4' };
 const mk = () => new YouTubeMockPublisher({ store: new MemoryStore() });

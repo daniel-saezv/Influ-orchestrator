@@ -1,0 +1,20 @@
+{
+  "worker_name": "influ-poc-orchestrator",
+  "compatibility_date": "2026-11-01",
+  "d1": { "binding": "DB", "name": "influ-poc-db", "id": "<TU_D1_DATABASE_ID>" },
+  "kv": { "binding": "MEDIA", "title": "influ-poc-media", "id": "<TU_KV_NAMESPACE_ID>" },
+  "crons": ["*/15 * * * *"],
+  "vars": {
+    "PUBLISHER_MODE": "mock",
+    "PUBLISHER_PROVIDER": "youtube",
+    "MAX_ATTEMPTS": "3",
+    "RETRY_BASE_SECONDS": "10",
+    "MAX_PUBLICATIONS_PER_RUN": "4",
+    "MAX_STATUS_POLLS": "3",
+    "DEPLOY_ENV": "poc",
+    "RATE_LIMIT_ENABLED": "true",
+    "RATE_LIMIT_HEALTH_PER_MINUTE": "120",
+    "RATE_LIMIT_ANON_PER_MINUTE": "60"
+  },
+  "secrets": ["BOT_HMAC_SECRET", "APPROVER_HMAC_SECRET"]
+}

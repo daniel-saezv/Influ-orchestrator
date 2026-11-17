@@ -1,6 +1,6 @@
 # Webhooks (API del orquestador)
 
-Base: `https://influ-poc-orchestrator.gamu-development.workers.dev`
+Base: `https://<worker-name>.<tu-subdominio>.workers.dev` (tu despliegue; ver `INFLU_BASE_URL`)
 
 ## Autenticación (todas salvo `/v1/health`)
 Cabeceras:

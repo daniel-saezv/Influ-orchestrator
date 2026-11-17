@@ -9,6 +9,7 @@ import { D1Repository } from './adapters/repository/d1-repository.js';
 import { D1MockProviderStore } from './adapters/repository/d1-mock-provider-store.js';
 import { KvMediaStorage } from './adapters/storage/kv-media-storage.js';
 import { verifyRequest } from './adapters/http/auth.js';
+import { applyHttpRateLimit, isAuthenticatedAttempt, purgeOldRateWindows } from './adapters/http/rate-limit.js';
 import { installEgressGuard, drainEgressAttempts } from './adapters/http/egress-guard.js';
 import { receiveBatch } from './workflows/wf01-receive-batch.js';
 import { decideBatch } from './workflows/wf02-approve-batch.js';
@@ -75,9 +76,13 @@ export default {
     const repo = new D1Repository(env.DB);
     try {
       if (request.method === 'GET' && url.pathname === '/v1/health') {
+        await applyHttpRateLimit(request, env, { scope: 'health' });
         let mode;
         try { mode = createPublisherRegistry(env, {}).config; } catch (e) { mode = { error: e.code ?? 'CONFIG', message: e.message }; }
         return json(200, { ok: true, service: 'influ-poc-orchestrator', version: SERVICE_VERSION, publisher: mode, live_enabled_in_build: LIVE_ENABLED_IN_BUILD, notice: 'POC Fase 1 — publicación SIMULADA' });
+      }
+      if (!isAuthenticatedAttempt(request)) {
+        await applyHttpRateLimit(request, env, { scope: 'anon' });
       }
       const bodyBytes = new Uint8Array(await request.arrayBuffer());
       // Subida de multimedia: PUT /v1/media/<sha256>
@@ -125,6 +130,8 @@ export default {
     execCtx.waitUntil((async () => {
       try {
         await dispatch({ trigger: `cron:${event.cron}` }, ctx);
+        const nowSec = Math.floor(Date.now() / 1000);
+        await purgeOldRateWindows(env.DB, Math.floor(nowSec / 60) - 120);
         await ctx.repo.purgeNonces(new Date(Date.now() - 24 * 3600 * 1000).toISOString());
       } catch (e) {
         await ctx.repo.audit('cron', 'DISPATCH_ERROR', null, { code: e.code ?? 'INTERNAL', message: e.message });

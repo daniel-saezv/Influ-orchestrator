@@ -11,7 +11,10 @@
     "RETRY_BASE_SECONDS": "10",
     "MAX_PUBLICATIONS_PER_RUN": "4",
     "MAX_STATUS_POLLS": "3",
-    "DEPLOY_ENV": "poc"
+    "DEPLOY_ENV": "poc",
+    "RATE_LIMIT_ENABLED": "true",
+    "RATE_LIMIT_HEALTH_PER_MINUTE": "120",
+    "RATE_LIMIT_ANON_PER_MINUTE": "60"
   },
   "secrets": ["BOT_HMAC_SECRET", "APPROVER_HMAC_SECRET"]
 }
