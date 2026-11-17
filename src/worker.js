@@ -26,7 +26,7 @@ function buildCtx(env, { actor, keyId }) {
   const settings = runtimeSettings(env);
   return {
     repo, settings, actor, keyId,
-    media: new KvMediaStorage(env.MEDIA),
+    media: new KvMediaStorage(env.MEDIA, env.DB),
     get registry() { // perezoso: si la config de modo es inválida, solo fallan las operaciones que la usan
       if (!this._registry) this._registry = createPublisherRegistry(env, { store: new D1MockProviderStore(env.DB), maxBytes: MAX_MEDIA_BYTES });
       return this._registry;
@@ -92,7 +92,7 @@ export default {
         if (!filename) throw err('MEDIA_INVALID', 'Falta X-Media-Filename', 400);
         const real = await sha256Hex(bodyBytes);
         if (real !== mm[1]) throw err('MEDIA_INVALID', 'El sha256 del contenido no coincide con la URL', 400);
-        const media = new KvMediaStorage(env.MEDIA);
+        const media = new KvMediaStorage(env.MEDIA, env.DB);
         const existing = await media.head(real);
         const r = existing ? { key: `media/${real}`, size_bytes: existing.size_bytes, sha256: real, already_stored: true } : await media.put(real, bodyBytes, { mime, filename });
         await repo.audit(keyId, 'MEDIA_STORED', null, { sha256: real, size: bodyBytes.length, mime, filename });

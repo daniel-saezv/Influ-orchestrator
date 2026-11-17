@@ -1,0 +1,143 @@
+{
+  "name": "WF-04 PUBLISHER_AND_ERROR_HANDLER",
+  "nodes": [
+    {
+      "id": "33924377-0a7c-4df5-8d14-22419fd2b778",
+      "name": "Webhook resultados",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "influ/results",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "d2032517-0f17-48e3-ba1e-d8564aeb39aa"
+    },
+    {
+      "id": "116399f3-2dea-44a2-87e2-7828c1fa52e7",
+      "name": "Firmar petición (bot)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Firma HMAC-SHA256 compatible con src/adapters/http/auth.js\nconst crypto = require('crypto');\nconst secret = $vars.INFLU_BOT_HMAC_SECRET;           // definir en n8n > Variables (nunca en el workflow)\nconst base = $vars.INFLU_BASE_URL;        // p. ej. https://influ-poc-orchestrator.<subdominio>.workers.dev\nconst item = $input.first().json;\nconst path = `/v1/batches/${item.body.batch_id}/results`;\nconst body = null;\nconst raw = body === null ? '' : JSON.stringify(body);\nconst ts = String(Math.floor(Date.now() / 1000));\nconst nonce = crypto.randomBytes(18).toString('base64url');\nconst bodyHash = crypto.createHash('sha256').update(raw).digest('hex');\nconst s = ['v1', ts, nonce, 'GET', path, bodyHash].join('\\n');\nconst sig = 'v1=' + crypto.createHmac('sha256', secret).update(s).digest('hex');\nreturn [{ json: { url: base + path, raw, headers: { 'x-influ-key-id': 'bot', 'x-influ-timestamp': ts, 'x-influ-nonce': nonce, 'x-influ-signature': sig } } }];"
+      }
+    },
+    {
+      "id": "2d3c4dcb-cad8-4d4f-80bb-3913012e6836",
+      "name": "Orquestador: resultados",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "c4e630e6-fd3c-4315-94fd-77f69f6fa8f7",
+      "name": "Informe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json.data;\nreturn [{ json: { batch_id: d.batch_id, status: d.status, mock: d.mock, report_markdown: d.report_markdown, publications: d.publications.map((p) => ({ id: p.publication_id, status: p.status, provider_post_id: p.provider_post_id, url: p.published_url, attempts: p.attempts })) } }];"
+      }
+    },
+    {
+      "id": "8f34735a-2c13-4822-b16d-43b89614a343",
+      "name": "Responder a Grok Bot",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook resultados": {
+      "main": [
+        [
+          {
+            "node": "Firmar petición (bot)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firmar petición (bot)": {
+      "main": [
+        [
+          {
+            "node": "Orquestador: resultados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Orquestador: resultados": {
+      "main": [
+        [
+          {
+            "node": "Informe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Informe": {
+      "main": [
+        [
+          {
+            "node": "Responder a Grok Bot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "note": "La invocación del adaptador, errores y reintentos viven en el orquestador (WF-04 en src/workflows). Aquí se consulta y se arma el informe."
+  },
+  "pinData": {},
+  "tags": []
+}

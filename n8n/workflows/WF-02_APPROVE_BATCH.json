@@ -1,0 +1,123 @@
+{
+  "name": "WF-02 APPROVE_BATCH",
+  "nodes": [
+    {
+      "id": "30e959ee-8924-4782-9439-0ede90c90077",
+      "name": "Webhook decisión",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "influ/decision",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "5be7a514-255a-4106-8c58-b064a9ca8577"
+    },
+    {
+      "id": "e7773c1a-0ec1-4eab-ad1d-687582adc884",
+      "name": "Firmar petición (aprobador)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Firma HMAC-SHA256 compatible con src/adapters/http/auth.js\nconst crypto = require('crypto');\nconst secret = $vars.INFLU_APPROVER_HMAC_SECRET;           // definir en n8n > Variables (nunca en el workflow)\nconst base = $vars.INFLU_BASE_URL;        // p. ej. https://influ-poc-orchestrator.<subdominio>.workers.dev\nconst item = $input.first().json;\nconst path = `/v1/batches/${item.body.batch_id}/decision`;\nconst body = { command_text: item.body.command_text, version: item.body.version, content_hash: item.body.content_hash, decided_by: item.body.decided_by };\nconst raw = body === null ? '' : JSON.stringify(body);\nconst ts = String(Math.floor(Date.now() / 1000));\nconst nonce = crypto.randomBytes(18).toString('base64url');\nconst bodyHash = crypto.createHash('sha256').update(raw).digest('hex');\nconst s = ['v1', ts, nonce, 'POST', path, bodyHash].join('\\n');\nconst sig = 'v1=' + crypto.createHmac('sha256', secret).update(s).digest('hex');\nreturn [{ json: { url: base + path, raw, headers: { 'x-influ-key-id': 'approver', 'x-influ-timestamp': ts, 'x-influ-nonce': nonce, 'x-influ-signature': sig } } }];"
+      }
+    },
+    {
+      "id": "2504f74d-1e66-4e0d-8ae2-d57b016f136c",
+      "name": "Orquestador: registrar decisión",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.raw }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "152b2843-13bc-488e-9274-e04ba34f0511",
+      "name": "Responder a Grok Bot",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook decisión": {
+      "main": [
+        [
+          {
+            "node": "Firmar petición (aprobador)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firmar petición (aprobador)": {
+      "main": [
+        [
+          {
+            "node": "Orquestador: registrar decisión",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Orquestador: registrar decisión": {
+      "main": [
+        [
+          {
+            "node": "Responder a Grok Bot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "note": "Requiere credencial Header Auth propia del aprobador + firma con la clave del aprobador. Nunca aprueba por sí mismo."
+  },
+  "pinData": {},
+  "tags": []
+}

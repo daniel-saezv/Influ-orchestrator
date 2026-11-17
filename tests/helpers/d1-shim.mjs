@@ -1,6 +1,7 @@
 // Doble de prueba de D1 sobre node:sqlite (solo para tests locales; producción usa D1 real).
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 class Stmt {
   constructor(db, sql, params = []) { this.db = db; this.sql = sql; this.params = params; }
@@ -17,7 +18,7 @@ class Stmt {
 
 export function createD1Shim(migrationPath) {
   const db = new DatabaseSync(':memory:');
-  db.exec(readFileSync(migrationPath, 'utf8'));
+  for (const f of readdirSync(migrationPath).sort()) db.exec(readFileSync(join(migrationPath, f), 'utf8'));
   return {
     prepare: (sql) => new Stmt(db, sql),
     async batch(stmts) {

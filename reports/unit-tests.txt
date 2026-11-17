@@ -1,0 +1,24 @@
+✔ canonicalize es estable con independencia del orden de claves (0.855689ms)
+✔ la huella cambia si cambia un copy, un hashtag, una fecha o el archivo (9.818319ms)
+✔ validación estructural: rechaza campos prohibidos (p. ej. forzar modo LIVE) y datos incompletos (0.687134ms)
+✔ estado agregado del lote (0.224108ms)
+✔ modo: MOCK por defecto y LIVE bloqueado (fail-closed) (0.393677ms)
+✔ comandos de decisión (0.844781ms)
+✔ contrato: mock, live (stub) y placeholders implementan SocialPublisher (0.832493ms)
+✔ ESCENARIO publicación correcta: ID y URL marcados como MOCK (1.933347ms)
+✔ ESCENARIO archivo incompatible: MIME no vídeo y firma inválida (0.745026ms)
+✔ ESCENARIO metadatos incompletos (0.224636ms)
+✔ ESCENARIO error temporal + reintento satisfactorio (0.542116ms)
+✔ ESCENARIO error permanente y error de autenticación (0.561474ms)
+✔ ESCENARIO publicación duplicada: mismo ID, nada nuevo (0.623205ms)
+✔ ESCENARIO consulta de estado: procesando -> publicado; ID inexistente (0.319112ms)
+✔ IDs simulados distintos por publicación (0.624816ms)
+✔ LIVE: el stub no hace nada y siempre devuelve LIVE_DISABLED (0.587316ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 76.62651

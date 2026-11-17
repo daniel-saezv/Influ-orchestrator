@@ -20,7 +20,7 @@ if (target === 'local') {
   const { createD1Shim, createKvShim } = await import('../helpers/d1-shim.mjs');
   const worker = (await import('../../src/worker.js')).default;
   const env = {
-    DB: createD1Shim(join(ROOT, 'migrations/0001_init.sql')), MEDIA: createKvShim(),
+    DB: createD1Shim(join(ROOT, 'migrations')), MEDIA: createKvShim(),
     BOT_HMAC_SECRET: 'local-test-bot-secret-0123456789abcdef', APPROVER_HMAC_SECRET: 'local-test-approver-secret-0123456789ab',
     PUBLISHER_MODE: 'mock', PUBLISHER_PROVIDER: 'youtube', RETRY_BASE_SECONDS: '2',
   };
@@ -260,6 +260,42 @@ await T('EXTRA S1', 'Seguridad: peticiones sin firma, firma inválida, replay, c
   const d = await client.call('POST', '/v1/dispatch', { body: { mode: 'live', publisher_mode: 'live' } });
   eq(d.data.mode, 'mock', 'dispatch ignora el modo de la petición');
   log.push('sin firma=401, firma inválida=401, replay=401 REPLAY_DETECTED, aprobar con clave bot=403, batch con mode=live=400, dispatch con mode=live => sigue mock');
+});
+
+await T('EXTRA S2', 'Programación: una publicación aprobada con fecha futura no se publica antes de su hora', async (log) => {
+  const id = `${MAIN}-F`;
+  const future = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString();
+  const def = { ...sampleDef, batch_id: id, title: 'Escenario fecha futura', publications: [{ ...sampleDef.publications[0], scheduled_at: future }] };
+  const m = await materializeBatch(def, sampleDir, { probe });
+  assert((await client.submitBatch(m.batch)).ok, 'submit');
+  const a = await approveCurrent(id); assert(a.ok, JSON.stringify(a.error));
+  const d = await client.dispatch(id);
+  const run = d.data.batches[0];
+  eq(run.processed.length, 0, 'nada procesado'); assert(run.skipped[0].reason.includes('hora'), 'motivo: aún no es la hora');
+  const s = await client.getBatchStatus(id);
+  eq(s.data.publications[0].status, 'SCHEDULED', 'publicación SCHEDULED'); eq(s.data.status, 'APPROVED', 'lote sigue APPROVED');
+  const r = await client.rejectBatch(id, { version: s.data.version, contentHash: s.data.content_hash, decidedBy: 'test' });
+  eq(r.data.status, 'REJECTED', 'rechazo explícito'); 
+  const s2 = await client.getBatchStatus(id);
+  eq(s2.data.publications[0].status, 'CANCELLED', 'publicación cancelada al rechazar');
+  log.push(`scheduled_at=${future} -> SCHEDULED, omitida ("${run.skipped[0].reason}"); RECHAZAR -> REJECTED y publicación CANCELLED`);
+});
+
+await T('EXTRA S3', 'Solicitar cambios: el lote no puede aprobarse sin una versión nueva', async (log) => {
+  const id = `${MAIN}-C`;
+  const def = { ...sampleDef, batch_id: id, title: 'Escenario cambios', publications: [{ ...sampleDef.publications[0], scheduled_at: past }] };
+  const m = await materializeBatch(def, sampleDir, { probe });
+  const sub = await client.submitBatch(m.batch); assert(sub.ok, 'submit');
+  const c = await client.requestBatchChanges(id, { version: 1, contentHash: sub.data.content_hash, decidedBy: 'test', comment: 'Cambia el título' });
+  eq(c.data.status, 'CHANGES_REQUESTED', 'estado');
+  const a = await client.approveBatch(id, { version: 1, contentHash: sub.data.content_hash, decidedBy: 'test' });
+  eq(a.status, 409, 'aprobar sin nueva versión => 409');
+  const nb = structuredClone(m.batch); nb.publications[0].copy.title = 'Título corregido #shorts';
+  const u = await client.updateBatch(nb, 'Título corregido');
+  eq(u.data.version, 2, 'v2'); eq(u.data.status, 'READY_FOR_REVIEW', 'nueva revisión');
+  const a2 = await client.approveBatch(id, { version: 2, contentHash: u.data.content_hash, decidedBy: 'test' });
+  eq(a2.data.status, 'APPROVED', 'v2 aprobada');
+  log.push('CAMBIOS -> CHANGES_REQUESTED; APROBAR misma versión -> 409; v2 -> READY_FOR_REVIEW -> APPROVED');
 });
 
 // ---------- Informe ----------

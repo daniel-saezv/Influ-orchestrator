@@ -1,0 +1,123 @@
+{
+  "name": "WF-03 SCHEDULE_AND_DISPATCH",
+  "nodes": [
+    {
+      "id": "7a136bfa-2903-4f94-8a6e-845c7b9bf3dc",
+      "name": "Cada 15 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "663ff265-25e8-4a53-910d-c146535de952",
+      "name": "Firmar petición (bot)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Firma HMAC-SHA256 compatible con src/adapters/http/auth.js\nconst crypto = require('crypto');\nconst secret = $vars.INFLU_BOT_HMAC_SECRET;           // definir en n8n > Variables (nunca en el workflow)\nconst base = $vars.INFLU_BASE_URL;        // p. ej. https://influ-poc-orchestrator.<subdominio>.workers.dev\nconst item = $input.first().json;\nconst path = '/v1/dispatch';\nconst body = {};\nconst raw = body === null ? '' : JSON.stringify(body);\nconst ts = String(Math.floor(Date.now() / 1000));\nconst nonce = crypto.randomBytes(18).toString('base64url');\nconst bodyHash = crypto.createHash('sha256').update(raw).digest('hex');\nconst s = ['v1', ts, nonce, 'POST', path, bodyHash].join('\\n');\nconst sig = 'v1=' + crypto.createHmac('sha256', secret).update(s).digest('hex');\nreturn [{ json: { url: base + path, raw, headers: { 'x-influ-key-id': 'bot', 'x-influ-timestamp': ts, 'x-influ-nonce': nonce, 'x-influ-signature': sig } } }];"
+      }
+    },
+    {
+      "id": "031c5268-89ab-4f5e-97c1-82362748c17f",
+      "name": "Orquestador: despachar aprobados",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.raw }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "5bf5d82c-3e57-40ab-96e6-48befc29b7d1",
+      "name": "Resumen de la ejecución",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json.data ?? {};\nreturn (d.batches ?? []).map((b) => ({ json: { batch_id: b.batch_id, processed: b.processed.length, blocked: b.blocked ?? null, batch_status: b.batch_status } }));"
+      }
+    }
+  ],
+  "connections": {
+    "Cada 15 minutos": {
+      "main": [
+        [
+          {
+            "node": "Firmar petición (bot)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firmar petición (bot)": {
+      "main": [
+        [
+          {
+            "node": "Orquestador: despachar aprobados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Orquestador: despachar aprobados": {
+      "main": [
+        [
+          {
+            "node": "Resumen de la ejecución",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "note": "Solo despacha lotes con aprobación válida (lo verifica el orquestador). No puede aprobar: no tiene la clave del aprobador."
+  },
+  "pinData": {},
+  "tags": []
+}

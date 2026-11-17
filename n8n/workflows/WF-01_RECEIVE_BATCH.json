@@ -1,0 +1,123 @@
+{
+  "name": "WF-01 RECEIVE_BATCH",
+  "nodes": [
+    {
+      "id": "4c220e70-20bc-4cfa-87f7-6049dcc0b40f",
+      "name": "Webhook submitBatch",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "influ/receive-batch",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "cc976aba-43b6-43dd-b360-50fa786d2496"
+    },
+    {
+      "id": "6c4771e8-bec3-4d1c-b6f6-d5a98af924e7",
+      "name": "Firmar petición (bot)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Firma HMAC-SHA256 compatible con src/adapters/http/auth.js\nconst crypto = require('crypto');\nconst secret = $vars.INFLU_BOT_HMAC_SECRET;           // definir en n8n > Variables (nunca en el workflow)\nconst base = $vars.INFLU_BASE_URL;        // p. ej. https://influ-poc-orchestrator.<subdominio>.workers.dev\nconst item = $input.first().json;\nconst path = '/v1/batches';\nconst body = item.body;\nconst raw = body === null ? '' : JSON.stringify(body);\nconst ts = String(Math.floor(Date.now() / 1000));\nconst nonce = crypto.randomBytes(18).toString('base64url');\nconst bodyHash = crypto.createHash('sha256').update(raw).digest('hex');\nconst s = ['v1', ts, nonce, 'POST', path, bodyHash].join('\\n');\nconst sig = 'v1=' + crypto.createHmac('sha256', secret).update(s).digest('hex');\nreturn [{ json: { url: base + path, raw, headers: { 'x-influ-key-id': 'bot', 'x-influ-timestamp': ts, 'x-influ-nonce': nonce, 'x-influ-signature': sig } } }];"
+      }
+    },
+    {
+      "id": "1d488237-3625-4dc4-9ab8-45ccc455e628",
+      "name": "Orquestador: registrar lote",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.raw }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "4365d0b8-1593-414f-8d9d-d7ff1010813e",
+      "name": "Responder a Grok Bot",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook submitBatch": {
+      "main": [
+        [
+          {
+            "node": "Firmar petición (bot)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firmar petición (bot)": {
+      "main": [
+        [
+          {
+            "node": "Orquestador: registrar lote",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Orquestador: registrar lote": {
+      "main": [
+        [
+          {
+            "node": "Responder a Grok Bot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "note": "Valida, comprueba archivos, registra lote y publicaciones, calcula huella (lo hace el orquestador) y devuelve el resultado."
+  },
+  "pinData": {},
+  "tags": []
+}

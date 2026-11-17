@@ -1,0 +1,19 @@
+# Esquema de datos (D1 `influ-poc-db`)
+
+Migraciones: `migrations/0001_init.sql`, `migrations/0002_media_index.sql`. Una tabla por entidad (equivalente a n8n Data Tables).
+
+| Tabla | Contenido | Claves |
+|---|---|---|
+| `batches` | Estado actual de cada lote: `version, status, content_hash, approved_at, approved_by, approved_version, approved_hash, validation_json` | `batch_id` |
+| `batch_versions` | Contenido completo de cada versión (`payload_json`) con su huella y nota de cambio | `(batch_id, version)` |
+| `publications` | Una fila por publicación y versión: plataforma, tipo, media (sha256, mime, tamaño), `post_json` (metadatos), `scheduled_at`, `status`, `provider_post_id`, `published_url`, `errors_json`, `attempts`, `next_retry_at`, `idempotency_key` | `publication_id` = `LOTE-XXXX-V<n>-P<nn>`; `idempotency_key` único |
+| `publication_events` | Historial de operaciones por publicación (registro, decisiones, reclamo, validate, upload, publish, status, reintentos, fallos) | autoincremental |
+| `approvals` | Cada decisión: versión, huella, decisión, quién, comando literal, clave usada, `valid`, motivo de invalidación | autoincremental |
+| `audit_log` | Registro de operaciones (recepción, versiones, decisiones, despachos, bloqueos, media) | autoincremental |
+| `nonces` | Nonces usados (anti-replay); se purgan a las 24 h | `nonce` |
+| `egress_log` | Intentos de salida a Internet bloqueados por la guardia | autoincremental |
+| `media_objects` | Índice de archivos (sha256, almacenamiento, clave, mime, tamaño) | `sha256` |
+| `mock_provider_records` | Estado interno del simulador de YouTube (separado del sistema) | `k` |
+
+## Huella del lote
+SHA-256 sobre JSON canónico (claves ordenadas) de: `batch_id`, `title`, `persona` y, por publicación ordenada por `seq`: `seq, platform, content_type, media (incl. sha256 del archivo), copy (textos, hashtags, etiquetas, privacidad, categoría…), scheduled_at, settings, test_controls`. Código: `src/core/domain/hash.js`.

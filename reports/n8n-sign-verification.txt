@@ -1,0 +1,3 @@
+WF-04_PUBLISHER_AND_ERROR_HANDLER.json · Firmar petición (bot) -> HTTP 200 ok=true
+WF-03_SCHEDULE_AND_DISPATCH.json · Firmar petición (bot) -> HTTP 200 ok=true
+WF-02_APPROVE_BATCH.json · Firmar petición (aprobador) -> HTTP 409 ok=false HASH_MISMATCH
