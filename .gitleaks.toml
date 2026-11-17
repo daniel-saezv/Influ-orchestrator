@@ -1,0 +1,13 @@
+# Configuración de gitleaks para CI (repo privado, sin gitleaks-action).
+# Allowlist estrecha: únicas cadenas HMAC de prueba para --target local (entorno in-memory).
+# No son secretos de producción (Worker: BOT_HMAC_SECRET / APPROVER_HMAC_SECRET en Cloudflare).
+
+title = "influ-poc"
+
+[allowlist]
+description = "Claves HMAC sintéticas en tests/acceptance/run.mjs (--target local)"
+paths = ['''tests/acceptance/run\.mjs''']
+regexes = [
+  '''local-test-bot-secret-0123456789abcdef''',
+  '''local-test-approver-secret-0123456789ab''',
+]
