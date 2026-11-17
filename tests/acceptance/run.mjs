@@ -28,7 +28,7 @@ if (target === 'local') {
   const transport = async (url, init) => { outbound.push(new URL(url).hostname); return worker.fetch(new Request(url, init), env); };
   client = new OrchestratorClient({ baseUrl: 'https://local.test', botSecret: env.BOT_HMAC_SECRET, approverSecret: env.APPROVER_HMAC_SECRET, transport });
 } else {
-  const cfg = JSON.parse(readFileSync(join(homedir(), '.config/influ-poc/secrets.json'), 'utf8'));
+  const cfg = loadInfluConfig();
   baseHost = new URL(cfg.base_url).hostname;
   const transport = async (url, init) => { outbound.push(new URL(url).hostname); return fetch(url, init); };
   client = new OrchestratorClient({ baseUrl: cfg.base_url, botSecret: cfg.bot_secret, approverSecret: cfg.approver_secret, transport });
@@ -310,3 +310,15 @@ const md = [`# Pruebas de aceptación — destino ${target}`, '', `Ejecutadas: $
 writeFileSync(join(ROOT, `reports/acceptance-${target}.md`), md);
 console.log(`\n${passed}/${results.length} OK -> reports/acceptance-${target}.md`);
 process.exit(passed === results.length ? 0 : 1);
+
+// Secretos: variables de entorno (secretos del bot de Grok Bot). El archivo local solo queda como respaldo temporal.
+function loadInfluConfig() {
+  const p = join(homedir(), '.config/influ-poc/secrets.json');
+  let file = {};
+  try { file = JSON.parse(readFileSync(p, 'utf8')); } catch {}
+  return {
+    base_url: process.env.INFLU_BASE_URL ?? file.base_url ?? 'https://influ-poc-orchestrator.gamu-development.workers.dev',
+    bot_secret: process.env.INFLU_BOT_HMAC_SECRET ?? file.bot_secret,
+    approver_secret: process.env.INFLU_APPROVER_HMAC_SECRET ?? file.approver_secret,
+  };
+}
