@@ -20,6 +20,10 @@ import { execFileSync } from 'node:child_process';
 import { OrchestratorClient, materializeBatch } from './client-lib.mjs';
 
 const cfg = loadInfluConfig();
+if (!cfg.base_url || !cfg.bot_secret || !cfg.approver_secret) {
+  console.error('Define INFLU_BASE_URL, INFLU_BOT_HMAC_SECRET e INFLU_APPROVER_HMAC_SECRET (o ~/.config/influ-poc/secrets.json).');
+  process.exit(2);
+}
 const c = new OrchestratorClient({ baseUrl: cfg.base_url, botSecret: cfg.bot_secret, approverSecret: cfg.approver_secret });
 const [cmd, a1, a2] = process.argv.slice(2);
 const opt = (n) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : undefined; };
@@ -71,7 +75,7 @@ function loadInfluConfig() {
   let file = {};
   try { file = JSON.parse(readFileSync(p, 'utf8')); } catch {}
   return {
-    base_url: process.env.INFLU_BASE_URL ?? file.base_url ?? 'https://influ-poc-orchestrator.gamu-development.workers.dev',
+    base_url: process.env.INFLU_BASE_URL ?? file.base_url,
     bot_secret: process.env.INFLU_BOT_HMAC_SECRET ?? file.bot_secret,
     approver_secret: process.env.INFLU_APPROVER_HMAC_SECRET ?? file.approver_secret,
   };

@@ -29,6 +29,10 @@ if (target === 'local') {
   client = new OrchestratorClient({ baseUrl: 'https://local.test', botSecret: env.BOT_HMAC_SECRET, approverSecret: env.APPROVER_HMAC_SECRET, transport });
 } else {
   const cfg = loadInfluConfig();
+  if (!cfg.base_url || !cfg.bot_secret || !cfg.approver_secret) {
+    console.error('Modo remote: define INFLU_BASE_URL, INFLU_BOT_HMAC_SECRET e INFLU_APPROVER_HMAC_SECRET.');
+    process.exit(2);
+  }
   baseHost = new URL(cfg.base_url).hostname;
   const transport = async (url, init) => { outbound.push(new URL(url).hostname); return fetch(url, init); };
   client = new OrchestratorClient({ baseUrl: cfg.base_url, botSecret: cfg.bot_secret, approverSecret: cfg.approver_secret, transport });
@@ -317,7 +321,7 @@ function loadInfluConfig() {
   let file = {};
   try { file = JSON.parse(readFileSync(p, 'utf8')); } catch {}
   return {
-    base_url: process.env.INFLU_BASE_URL ?? file.base_url ?? 'https://influ-poc-orchestrator.gamu-development.workers.dev',
+    base_url: process.env.INFLU_BASE_URL ?? file.base_url,
     bot_secret: process.env.INFLU_BOT_HMAC_SECRET ?? file.bot_secret,
     approver_secret: process.env.INFLU_APPROVER_HMAC_SECRET ?? file.approver_secret,
   };

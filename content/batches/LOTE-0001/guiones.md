@@ -20,4 +20,4 @@
 
 `ffmpeg`: imagen → 8 s a 30 fps, 720x1280, zoom lento (Ken Burns), rótulo inferior con el gancho, aviso superior "IA · contenido sintético · LOTE-0001", pista de audio silenciosa. Sin voz ni música en esta fase (pendiente: TTS/música con licencia).
 
-Las imágenes originales están en `previews/`; los vídeos finales en `media/`.
+Las vistas previas están en `previews/`; los vídeos en `media/` (en este repo solo placeholders de prueba; ver `content/batches/README.md`).

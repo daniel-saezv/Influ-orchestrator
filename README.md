@@ -3,8 +3,8 @@
 Sistema de lotes de contenido con aprobación explícita y publicación **simulada** (YouTube MOCK).
 Nada se publica en redes reales. El modo LIVE está bloqueado en el código.
 
-- Orquestador desplegado (Cloudflare Workers, plan gratuito): `https://influ-poc-orchestrator.gamu-development.workers.dev`
-  (`/v1/health` es público; el resto exige firma HMAC).
+- Orquestador en Cloudflare Workers (plan gratuito): `https://<worker-name>.<tu-subdominio>.workers.dev`
+  (`/v1/health` es público con rate limit; el resto exige firma HMAC). Ver `docs/seguridad-api.md`.
 - Registro de datos: Cloudflare D1 `influ-poc-db` (en lugar de n8n Data Tables).
 - Multimedia: Workers KV `influ-poc-media` + índice en D1 (en lugar de R2, que no está activado en la cuenta).
 - Motor periódico: Cron Trigger del Worker cada 15 min (en lugar de n8n; plantillas n8n listas en `n8n/workflows/`).
@@ -41,7 +41,7 @@ deploy/              generador de scripts de despliegue vía conector MCP de Clo
 Exporta en el entorno (secretos del bot, no en el repo):
 
 - `INFLU_BOT_HMAC_SECRET` / `INFLU_APPROVER_HMAC_SECRET` — mismos valores que `BOT_HMAC_SECRET` / `APPROVER_HMAC_SECRET` del Worker (panel de Cloudflare o `wrangler secret put`).
-- `INFLU_BASE_URL` — opcional; por defecto `https://influ-poc-orchestrator.gamu-development.workers.dev`.
+- `INFLU_BASE_URL` — URL base del Worker desplegado (obligatoria en CLI/pruebas remotas).
 
 `~/.config/influ-poc/secrets.json` solo se usa como respaldo si faltan las variables.
 
@@ -54,4 +54,4 @@ node tests/acceptance/run.mjs --target remote   # TEST 01–13 + seguridad, cont
 ```
 Resultados: `reports/test-report.md`.
 
-Documentación: `docs/` (empieza por `docs/arquitectura.md`).
+Documentación: `docs/` (empieza por `docs/arquitectura.md`). Licencia: [MIT](LICENSE) — ver alternativas en la PR de preparación a repo público. Antes de publicar: `docs/github-seguridad.md`, `docs/contenido-generado-ia.md`.
