@@ -3,8 +3,8 @@
 Sistema de lotes de contenido con aprobación explícita y publicación **simulada** (YouTube MOCK).
 Nada se publica en redes reales. El modo LIVE está bloqueado en el código.
 
-- Orquestador en Cloudflare Workers (plan gratuito): `https://<worker-name>.<tu-subdominio>.workers.dev`
-  (`/v1/health` es público con rate limit; el resto exige firma HMAC). Ver `docs/seguridad-api.md`.
+- Orquestador en Cloudflare Workers (plan gratuito): despliegue vía [`wrangler.toml`](wrangler.toml) y CI ([`docs/despliegue-ci.md`](docs/despliegue-ci.md)).
+  Cloudflare Access en workers.dev + firma HMAC en la API. Ver `docs/seguridad-api.md`.
 - Registro de datos: Cloudflare D1 `influ-poc-db` (en lugar de n8n Data Tables).
 - Multimedia: Workers KV `influ-poc-media` + índice en D1 (en lugar de R2, que no está activado en la cuenta).
 - Motor periódico: Cron Trigger del Worker cada 15 min (en lugar de n8n; plantillas n8n listas en `n8n/workflows/`).

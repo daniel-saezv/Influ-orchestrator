@@ -19,6 +19,8 @@ Variables del Worker (`deploy/cloudflare.json` → bindings `plain_text`):
 
 **Secrets del Worker** (panel de Cloudflare o `wrangler secret put`): `BOT_HMAC_SECRET` (Grok Bot: lotes, despacho, consultas) y `APPROVER_HMAC_SECRET` (solo decisiones).
 
+Variables plain text en [`wrangler.toml`](../wrangler.toml) (despliegue CI); `deploy/cloudflare.json` queda como referencia legacy — ver [`docs/despliegue-ci.md`](despliegue-ci.md).
+
 **CLI del bot y pruebas remotas** (secretos del entorno de ejecución, nunca en el repo):
 
 | Variable | Obligatoria | Descripción |

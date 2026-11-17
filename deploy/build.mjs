@@ -1,3 +1,4 @@
+// LEGACY — ver deploy/README-legacy.md. Despliegue canónico: wrangler.toml + GitHub Actions.
 // Genera los scripts que se ejecutan con la herramienta "execute" del conector MCP de Cloudflare
 // (la API de Cloudflare se usa vía conector; no hay token local). Salida: deploy/out/*.js (ignorado por git).
 //   node deploy/build.mjs worker    -> deploy/out/deploy-worker.js   (sube el Worker + bindings + cron + workers.dev)
