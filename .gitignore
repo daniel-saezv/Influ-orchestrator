@@ -6,3 +6,10 @@ node_modules/
 deploy/out/
 reports/raw/
 .dev.vars
+
+# Secretos y claves (nunca en el repositorio)
+secrets.json
+**/secrets.json
+*.pem
+*.key
+wrangler.toml
