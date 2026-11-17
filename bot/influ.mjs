@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // CLI de Grok Bot para operar la POC (lo que usa el bot cuando el usuario pide/aprueba lotes).
-// Lee la URL y los secretos de ~/.config/influ-poc/secrets.json (fuera del repositorio).
+// Lee los secretos de las variables de entorno INFLU_BOT_HMAC_SECRET / INFLU_APPROVER_HMAC_SECRET (secretos del bot).
 //
 //   node bot/influ.mjs health
 //   node bot/influ.mjs submit  content/batches/LOTE-0001          (sube media + envía el lote)
@@ -19,7 +19,7 @@ import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { OrchestratorClient, materializeBatch } from './client-lib.mjs';
 
-const cfg = JSON.parse(readFileSync(join(homedir(), '.config/influ-poc/secrets.json'), 'utf8'));
+const cfg = loadInfluConfig();
 const c = new OrchestratorClient({ baseUrl: cfg.base_url, botSecret: cfg.bot_secret, approverSecret: cfg.approver_secret });
 const [cmd, a1, a2] = process.argv.slice(2);
 const opt = (n) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : undefined; };
@@ -63,4 +63,16 @@ switch (cmd) {
   case 'audit': show(await c.audit(a1)); break;
   case 'egress': show(await c.egress()); break;
   default: console.log(readFileSync(new URL(import.meta.url)).toString().split('\n').filter((l) => l.startsWith('//')).join('\n'));
+}
+
+// Secretos: variables de entorno (secretos del bot de Grok Bot). El archivo local solo queda como respaldo temporal.
+function loadInfluConfig() {
+  const p = join(homedir(), '.config/influ-poc/secrets.json');
+  let file = {};
+  try { file = JSON.parse(readFileSync(p, 'utf8')); } catch {}
+  return {
+    base_url: process.env.INFLU_BASE_URL ?? file.base_url ?? 'https://influ-poc-orchestrator.gamu-development.workers.dev',
+    bot_secret: process.env.INFLU_BOT_HMAC_SECRET ?? file.bot_secret,
+    approver_secret: process.env.INFLU_APPROVER_HMAC_SECRET ?? file.approver_secret,
+  };
 }

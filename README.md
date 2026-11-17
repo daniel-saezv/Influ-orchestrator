@@ -36,12 +36,21 @@ docs/                arquitectura, contratos, datos, webhooks, instalación, con
 deploy/              generador de scripts de despliegue vía conector MCP de Cloudflare
 ```
 
+## Secretos del bot (CLI / pruebas remotas)
+
+Exporta en el entorno (secretos del bot, no en el repo):
+
+- `INFLU_BOT_HMAC_SECRET` / `INFLU_APPROVER_HMAC_SECRET` — mismos valores que `BOT_HMAC_SECRET` / `APPROVER_HMAC_SECRET` del Worker (panel de Cloudflare o `wrangler secret put`).
+- `INFLU_BASE_URL` — opcional; por defecto `https://influ-poc-orchestrator.gamu-development.workers.dev`.
+
+`~/.config/influ-poc/secrets.json` solo se usa como respaldo si faltan las variables.
+
 ## Pruebas
 
 ```
 npm run test:unit                          # 16 pruebas: dominio, modo, simulador (8 escenarios)
 node tests/acceptance/run.mjs --target local    # TEST 01–13 + seguridad, en memoria
-node tests/acceptance/run.mjs --target remote   # TEST 01–13 + seguridad, contra el Worker desplegado
+node tests/acceptance/run.mjs --target remote   # TEST 01–13 + seguridad, contra el Worker (requiere INFLU_*)
 ```
 Resultados: `reports/test-report.md`.
 
