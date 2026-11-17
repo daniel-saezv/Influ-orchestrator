@@ -12,4 +12,3 @@ secrets.json
 **/secrets.json
 *.pem
 *.key
-wrangler.toml
