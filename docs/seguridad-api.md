@@ -10,6 +10,8 @@ El Worker aplica **rate limiting por IP** en D1 (`migrations/0003_rate_limits.sq
 | `RATE_LIMIT_HEALTH_PER_MINUTE` | `120` | `GET /v1/health` |
 | `RATE_LIMIT_ANON_PER_MINUTE` | `60` | Peticiones **sin** las cuatro cabeceras HMAC (probing, fuzzing) |
 
+Las claves usan `CF-Connecting-IP`: IPv4 exacta; IPv6 agregada por **prefijo /64** (clientes con IPv6 efímera en la misma subred); `::ffff:x.x.x.x` como IPv4.
+
 Las peticiones **firmadas** no cuentan en el bucket `anon` (siguen exigiendo HMAC, nonce y ventana temporal). La limpieza de ventanas antiguas corre en el Cron del Worker.
 
 Tras desplegar, aplica la migración D1 (`0003_rate_limits.sql`) junto con el resto.
