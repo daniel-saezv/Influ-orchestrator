@@ -172,6 +172,256 @@ export class D1Repository {
     const total = await this.db.prepare('SELECT COUNT(*) AS n FROM egress_log').first();
     return { total: total.n, rows };
   }
+
+  async ensureUser(email, now) {
+    const existing = await this.db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+    if (existing) return existing;
+    const userId = crypto.randomUUID();
+    try {
+      await this.db.prepare('INSERT INTO users (user_id, email, display_name, time_zone, guide_seen_at, created_at, updated_at) VALUES (?, ?, NULL, NULL, NULL, ?, ?)').bind(userId, email, now, now).run();
+    } catch (e) {
+      if (!String(e.message ?? e).includes('UNIQUE')) throw e;
+    }
+    return this.db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  }
+
+  async listAccounts(userId) {
+    const r = await this.db.prepare('SELECT account_id, name FROM accounts WHERE user_id = ? ORDER BY created_at').bind(userId).all();
+    return r.results;
+  }
+
+  async saveGuide(userId, { displayName, timeZone, now }) {
+    await this.db.prepare('UPDATE users SET display_name = ?, time_zone = ?, guide_seen_at = COALESCE(guide_seen_at, ?), updated_at = ? WHERE user_id = ?')
+      .bind(displayName, timeZone, now, now, userId).run();
+    const accounts = await this.listAccounts(userId);
+    if (accounts.length === 0) {
+      const accountId = crypto.randomUUID();
+      await this.db.prepare('INSERT INTO accounts (account_id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+        .bind(accountId, userId, displayName, now, now).run();
+    }
+    return this.db.prepare('SELECT * FROM users WHERE user_id = ?').bind(userId).first();
+  }
+
+  async renameUser(userId, displayName, timeZone, now) {
+    if (timeZone) {
+      await this.db.prepare('UPDATE users SET display_name = ?, time_zone = ?, updated_at = ? WHERE user_id = ?').bind(displayName, timeZone, now, userId).run();
+    } else {
+      await this.db.prepare('UPDATE users SET display_name = ?, updated_at = ? WHERE user_id = ?').bind(displayName, now, userId).run();
+    }
+    return this.db.prepare('SELECT * FROM users WHERE user_id = ?').bind(userId).first();
+  }
+
+  async ownedAccount(email, accountId) {
+    return this.db.prepare(`SELECT a.account_id, a.user_id, a.name, u.email, u.time_zone, u.guide_seen_at
+      FROM accounts a JOIN users u ON u.user_id = a.user_id
+      WHERE a.account_id = ? AND u.email = ?`).bind(accountId, email).first();
+  }
+
+  async createAccount(userId, name, now) {
+    const accountId = crypto.randomUUID();
+    await this.db.prepare('INSERT INTO accounts (account_id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(accountId, userId, name, now, now).run();
+    return { account_id: accountId, name };
+  }
+
+  async renameAccount(accountId, name, now) {
+    await this.db.prepare('UPDATE accounts SET name = ?, updated_at = ? WHERE account_id = ?').bind(name, now, accountId).run();
+    return { account_id: accountId, name };
+  }
+
+  async insertEncargo({ accountId, kind, note, status, platforms, now }) {
+    const encargoId = crypto.randomUUID();
+    await this.db.batch([
+      this.db.prepare(`INSERT INTO encargos (encargo_id, account_id, kind, note, status, platforms_json, version, delivered, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)`).bind(encargoId, accountId, kind, note, status, j(platforms), now, now),
+      this.db.prepare('INSERT INTO encargo_events (account_id, encargo_id, at, kind, detail_json) VALUES (?, ?, ?, ?, ?)')
+        .bind(accountId, encargoId, now, 'created', j({ kind, platforms })),
+    ]);
+    return encargoId;
+  }
+
+  async encargoForEmail(email, encargoId) {
+    const row = await this.db.prepare(`SELECT e.*, a.user_id, a.name AS account_name, u.email, u.time_zone
+      FROM encargos e
+      JOIN accounts a ON a.account_id = e.account_id
+      JOIN users u ON u.user_id = a.user_id
+      WHERE e.encargo_id = ? AND u.email = ?`).bind(encargoId, email).first();
+    return row ? parseEncargo(row) : null;
+  }
+
+  async encargoById(encargoId) {
+    const row = await this.db.prepare(`SELECT e.*, a.user_id, a.name AS account_name
+      FROM encargos e JOIN accounts a ON a.account_id = e.account_id
+      WHERE e.encargo_id = ?`).bind(encargoId).first();
+    return row ? parseEncargo(row) : null;
+  }
+
+  async listQueuedEncargos() {
+    const rows = (await this.db.prepare(`SELECT e.encargo_id, e.account_id, a.name AS account_name, e.kind, e.note, e.platforms_json, e.version
+      FROM encargos e JOIN accounts a ON a.account_id = e.account_id
+      WHERE e.status = 'queued' ORDER BY e.created_at LIMIT 20`).all()).results;
+    const assets = (await this.db.prepare(`SELECT s.encargo_id, s.role, s.r2_key, s.sha256, s.mime, s.size_bytes, s.version
+      FROM encargo_assets s JOIN encargos e ON e.encargo_id = s.encargo_id
+      WHERE e.status = 'queued'`).all()).results;
+    return rows.map((row) => ({
+      encargo_id: row.encargo_id,
+      account_id: row.account_id,
+      account_name: row.account_name,
+      kind: row.kind,
+      note: row.note,
+      platforms: JSON.parse(row.platforms_json),
+      version: row.version,
+      assets: assets.filter((a) => a.encargo_id === row.encargo_id).map(({ encargo_id, ...rest }) => rest),
+    }));
+  }
+
+  async claimEncargo(encargoId, now) {
+    const r = await this.db.prepare(`UPDATE encargos SET status = 'claimed', updated_at = ? WHERE encargo_id = ? AND status = 'queued'`).bind(now, encargoId).run();
+    return r.meta.changes === 1;
+  }
+
+  async addEncargoAsset({ encargoId, userId, role, r2Key, sha256, mime, sizeBytes, version, now }) {
+    const assetId = crypto.randomUUID();
+    await this.db.batch([
+      this.db.prepare(`INSERT INTO encargo_assets (asset_id, encargo_id, role, r2_key, sha256, mime, size_bytes, version, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(assetId, encargoId, role, r2Key, sha256, mime, sizeBytes, version, now),
+      this.db.prepare(`INSERT INTO r2_bytes (scope, bytes_stored) VALUES ('global', ?)
+        ON CONFLICT(scope) DO UPDATE SET bytes_stored = bytes_stored + excluded.bytes_stored`).bind(sizeBytes),
+      this.db.prepare(`INSERT INTO r2_bytes (scope, bytes_stored) VALUES (?, ?)
+        ON CONFLICT(scope) DO UPDATE SET bytes_stored = bytes_stored + excluded.bytes_stored`).bind(userId, sizeBytes),
+    ]);
+    return assetId;
+  }
+
+  async finishEncargoResult({ encargoId, version, contentHash, synthetic, batchId, now }) {
+    const r = await this.db.prepare(`UPDATE encargos
+      SET status = 'ready', version = ?, content_hash = ?, synthetic = ?, delivered = 1, batch_id = COALESCE(?, batch_id), updated_at = ?
+      WHERE encargo_id = ? AND status = 'claimed'`).bind(version, contentHash, synthetic ? 1 : 0, batchId ?? null, now, encargoId).run();
+    return r.meta.changes === 1;
+  }
+
+  async attachBatchToAccount(batchId, accountId) {
+    const row = await this.db.prepare('SELECT account_id FROM batches WHERE batch_id = ?').bind(batchId).first();
+    if (!row) return 'missing';
+    if (row.account_id && row.account_id !== accountId) return 'foreign';
+    if (!row.account_id) {
+      await this.db.prepare('UPDATE batches SET account_id = ? WHERE batch_id = ? AND account_id IS NULL').bind(accountId, batchId).run();
+    }
+    return 'ok';
+  }
+
+  async mediaForEmail(email, sha256) {
+    return this.db.prepare(`SELECT s.sha256, s.mime, s.size_bytes, s.role, s.encargo_id
+      FROM encargo_assets s
+      JOIN encargos e ON e.encargo_id = s.encargo_id
+      JOIN accounts a ON a.account_id = e.account_id
+      JOIN users u ON u.user_id = a.user_id
+      WHERE s.sha256 = ? AND u.email = ? LIMIT 1`).bind(sha256, email).first();
+  }
+
+  async sumAssets(encargoId, { role, versions } = {}) {
+    const row = role && versions
+      ? await this.db.prepare(`SELECT COALESCE(SUM(size_bytes), 0) AS n FROM encargo_assets
+        WHERE encargo_id = ? AND role = ? AND version IN (?, ?)`).bind(encargoId, role, versions[0], versions[1]).first()
+      : await this.db.prepare('SELECT COALESCE(SUM(size_bytes), 0) AS n FROM encargo_assets WHERE encargo_id = ?').bind(encargoId).first();
+    return Number(row?.n ?? 0);
+  }
+
+  async discardDeliverables({ encargoId, accountId, userId, version, now }) {
+    const bytes = await this.sumAssets(encargoId, { role: 'deliverable', versions: [version, version - 1] });
+    const updated = await this.db.prepare(`UPDATE encargos SET status = 'queued', content_hash = NULL, publish_at = NULL, updated_at = ? WHERE encargo_id = ? AND status IN ('ready', 'approved', 'scheduled')`).bind(now, encargoId).run();
+    if (updated.meta.changes !== 1) return { changed: false, bytes: 0 };
+    const stmts = [
+      this.db.prepare(`DELETE FROM encargo_assets WHERE encargo_id = ? AND role = 'deliverable' AND version IN (?, ?)`).bind(encargoId, version, version - 1),
+      this.db.prepare('INSERT INTO encargo_events (account_id, encargo_id, at, kind, detail_json) VALUES (?, ?, ?, ?, ?)').bind(accountId, encargoId, now, 'changes', j({ version })),
+    ];
+    if (bytes) stmts.push(...byteRelease(this.db, userId, bytes));
+    await this.db.batch(stmts);
+    return { changed: true, bytes };
+  }
+
+  async cancelEncargoAssets({ encargoId, accountId, userId, now }) {
+    const bytes = await this.sumAssets(encargoId);
+    const updated = await this.db.prepare(`UPDATE encargos SET status = 'cancelled', publish_at = NULL, updated_at = ? WHERE encargo_id = ? AND status != 'cancelled'`).bind(now, encargoId).run();
+    if (updated.meta.changes !== 1) return { changed: false, bytes: 0 };
+    const stmts = [
+      this.db.prepare('DELETE FROM encargo_assets WHERE encargo_id = ?').bind(encargoId),
+      this.db.prepare('INSERT INTO encargo_events (account_id, encargo_id, at, kind, detail_json) VALUES (?, ?, ?, ?, NULL)').bind(accountId, encargoId, now, 'cancelled'),
+    ];
+    if (bytes) stmts.push(...byteRelease(this.db, userId, bytes));
+    await this.db.batch(stmts);
+    return { changed: true, bytes };
+  }
+
+  async markApproved(encargoId, accountId, version, contentHash, now) {
+    const updated = await this.db.prepare(`UPDATE encargos SET status = 'approved', updated_at = ? WHERE encargo_id = ? AND status = 'ready' AND version = ? AND content_hash = ?`)
+      .bind(now, encargoId, version, contentHash).run();
+    if (updated.meta.changes !== 1) return false;
+    await this.db.prepare('INSERT INTO encargo_events (account_id, encargo_id, at, kind, detail_json) VALUES (?, ?, ?, ?, ?)')
+      .bind(accountId, encargoId, now, 'approved', j({ version })).run();
+    return true;
+  }
+
+  async markScheduled(encargoId, accountId, publishAt, platforms, now) {
+    const updated = await this.db.prepare(`UPDATE encargos SET status = 'scheduled', publish_at = ?, updated_at = ? WHERE encargo_id = ? AND status = 'approved'`)
+      .bind(publishAt, now, encargoId).run();
+    if (updated.meta.changes !== 1) return false;
+    await this.db.prepare('INSERT INTO encargo_events (account_id, encargo_id, at, kind, detail_json) VALUES (?, ?, ?, ?, ?)')
+      .bind(accountId, encargoId, now, 'scheduled', j({ publish_at: publishAt, platforms })).run();
+    return true;
+  }
+
+  async streakRow(accountId) {
+    return this.db.prepare('SELECT count, last_civil_day FROM streaks WHERE account_id = ?').bind(accountId).first();
+  }
+
+  async saveStreak(accountId, count, day, now) {
+    await this.db.prepare(`INSERT INTO streaks (account_id, count, last_civil_day, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(account_id) DO UPDATE SET count = excluded.count, last_civil_day = excluded.last_civil_day, updated_at = excluded.updated_at`)
+      .bind(accountId, count, day, now).run();
+  }
+
+  async listActivity(accountId) {
+    const rows = (await this.db.prepare('SELECT at, kind, encargo_id, detail_json FROM encargo_events WHERE account_id = ? ORDER BY id DESC LIMIT 50').bind(accountId).all()).results;
+    return rows.map((row) => ({ ...row, detail: row.detail_json ? JSON.parse(row.detail_json) : null, detail_json: undefined }));
+  }
+
+  async listConnections(accountId) {
+    return (await this.db.prepare('SELECT connection_id, platform, created_at FROM platform_connections WHERE account_id = ? ORDER BY created_at').bind(accountId).all()).results;
+  }
+
+  async connectionForEmail(email, connectionId) {
+    return this.db.prepare(`SELECT c.connection_id, c.platform, c.created_at
+      FROM platform_connections c
+      JOIN accounts a ON a.account_id = c.account_id
+      JOIN users u ON u.user_id = a.user_id
+      WHERE c.connection_id = ? AND u.email = ?`).bind(connectionId, email).first();
+  }
+
+  async storedBytes(scope) {
+    const row = await this.db.prepare('SELECT bytes_stored FROM r2_bytes WHERE scope = ?').bind(scope).first();
+    return row?.bytes_stored ?? 0;
+  }
+
+  async countConnections() {
+    return (await this.db.prepare('SELECT COUNT(*) AS n FROM platform_connections').first()).n;
+  }
+
+  async recordEncargoEvent(accountId, encargoId, now, kind, detail) {
+    await this.db.prepare('INSERT INTO encargo_events (account_id, encargo_id, at, kind, detail_json) VALUES (?, ?, ?, ?, ?)')
+      .bind(accountId, encargoId, now, kind, j(detail)).run();
+  }
+}
+
+function byteRelease(db, userId, bytes) {
+  return [
+    db.prepare(`UPDATE r2_bytes SET bytes_stored = bytes_stored - ? WHERE scope = 'global' AND bytes_stored >= ?`).bind(bytes, bytes),
+    db.prepare('UPDATE r2_bytes SET bytes_stored = bytes_stored - ? WHERE scope = ? AND bytes_stored >= ?').bind(bytes, userId, bytes),
+  ];
+}
+
+function parseEncargo(row) {
+  return { ...row, platforms: JSON.parse(row.platforms_json), synthetic: row.synthetic === null || row.synthetic === undefined ? null : row.synthetic === 1 };
 }
 
 function parsePub(r) {
