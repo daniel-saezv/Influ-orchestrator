@@ -378,10 +378,13 @@ Este documento es la fase 0. Cada fase siguiente va en su PR, con pruebas. Un so
 | F | R2 Standard: cada parte un `put` con `sha256` comprobado por R2, tope 150 MB, contadores de 30 días, borrado inmediato y ciclo de vida solo para huérfanos, sin Infrequent Access. El usuario ha completado el alta antes de desplegar el binding. | Adaptador R2, `src/worker.js`, pruebas de tope, checksum y borrado | Después de A. No a la vez que E |
 | G | UI real en los assets del Worker y manifiesto PWA, sin service worker. | `ui/**`, `wrangler.toml` | Después de A, B, C y F |
 | H | iPhone: Safari, icono, Access dentro de la PWA, cámara, galería, audio, reanudación, previa 9:16, selector de cuentas. | Ajustes de `ui/` si la prueba lo pide | Después de G |
+| I | Service worker de la PWA: caché del shell y de los datos para usarla sin red o con mala cobertura, y notificaciones push en iPhone (hace falta la app en la pantalla de inicio). Pendiente, opcional y aplazable. | `ui/**` | Después de H. Se puede ir atrasando indefinidamente. |
 
 OAuth, tokens y adaptadores LIVE no están en estas fases. La tabla `platform_connections` se crea vacía en A para no migrar dos veces.
 
 La fase F prueba, además del tope y del checksum: `changes` borra la pieza descartada y la versión anterior, baja los bytes y deja el origen, de modo que una segunda generación lo vuelve a leer; cancelar borra origen y versiones y deja los bytes a cero para ese encargo; cerrar en `COMPLETED`, `FAILED` o `PARTIALLY_COMPLETED` borra la pieza que quedaba y el origen. Las operaciones de clase A y B de la ventana no bajan. Un `DeleteObject` que falla deja la fila y los bytes, y el cron lo reintenta.
+
+La fase I es la última y queda pendiente: es opcional y se puede ir atrasando indefinidamente. Añade un service worker a la PWA para dos cosas: usar la interfaz sin conexión o con mala red, guardando en caché el shell de la UI y los datos; y enviar notificaciones push en iPhone (hace falta tener la PWA instalada en la pantalla de inicio y un service worker), por ejemplo avisos de encargos. El riesgo a tratar es servir versiones antiguas de la UI desde la caché, así que hace falta una estrategia de versionado y actualización. Por eso se dejó fuera del MVP y de la fase G.
 
 Pruebas de código, cuando existan: `npm run test:unit`, `npm run test:acceptance -- --target local`, `npm run deploy:guard`. Este PR no tiene UI que abrir.
 
