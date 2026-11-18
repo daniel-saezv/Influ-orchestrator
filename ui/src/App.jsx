@@ -10,6 +10,18 @@ import { ToggleGroup, ToggleGroupItem } from './components/ui/toggle-group.jsx'
 
 const PLATFORMS = ['YouTube', 'Instagram', 'TikTok']
 const MAX_FILE_BYTES = 150 * 1024 * 1024
+const SAFE_PREVIEW_TYPES = new Set([
+  'image/avif',
+  'image/bmp',
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'video/mp4',
+  'video/ogg',
+  'video/quicktime',
+  'video/webm',
+])
 
 function Shell({ eyebrow, title, children, footer, onBack }) {
   return (
@@ -60,13 +72,17 @@ function PlatformChoices({ value, onChange }) {
 }
 
 function FilePreview({ file }) {
-  const url = useMemo(() => file ? URL.createObjectURL(file) : '', [file])
+  const url = useMemo(() => {
+    if (!file || !SAFE_PREVIEW_TYPES.has(file.type)) return ''
+    const objectUrl = URL.createObjectURL(file)
+    return new URL(objectUrl).protocol === 'blob:' ? encodeURI(objectUrl) : ''
+  }, [file])
   useEffect(() => () => url && URL.revokeObjectURL(url), [url])
   if (!file) return null
-  if (file.type.startsWith('video/')) {
+  if (url && file.type.startsWith('video/')) {
     return <video className="selected-preview" src={url} playsInline muted controls />
   }
-  if (file.type.startsWith('image/')) {
+  if (url && file.type.startsWith('image/')) {
     return <img className="selected-preview" src={url} alt={`Vista previa de ${file.name}`} />
   }
   return <div className="audio-preview"><Upload aria-hidden="true" /><span>{file.name}</span></div>
