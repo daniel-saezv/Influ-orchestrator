@@ -6,6 +6,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { OrchestratorClient, materializeBatch, sign } from '../../bot/client-lib.mjs';
+import { createAccessSigner, cryptoKeyFromPublic } from '../helpers/access-token.mjs';
 import { validateBatchInput } from '../../src/core/domain/batch.js';
 import { contentHash } from '../../src/core/domain/hash.js';
 
@@ -15,10 +16,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- Transporte ----------
 const outbound = []; // todas las peticiones HTTP que hace este proceso
-let client, retryBase = 10, baseHost;
+let client, retryBase = 10, baseHost, workerMod;
 if (target === 'local') {
   const { createD1Shim, createKvShim } = await import('../helpers/d1-shim.mjs');
-  const worker = (await import('../../src/worker.js')).default;
+  workerMod = await import('../../src/worker.js');
+  const worker = workerMod.default;
   const env = {
     DB: createD1Shim(join(ROOT, 'migrations')), MEDIA: createKvShim(),
     BOT_HMAC_SECRET: 'local-test-bot-secret-0123456789abcdef', APPROVER_HMAC_SECRET: 'local-test-approver-secret-0123456789ab',
@@ -301,6 +303,72 @@ await T('EXTRA S3', 'Solicitar cambios: el lote no puede aprobarse sin una versi
   eq(a2.data.status, 'APPROVED', 'v2 aprobada');
   log.push('CAMBIOS -> CHANGES_REQUESTED; APROBAR misma versión -> 409; v2 -> READY_FOR_REVIEW -> APPROVED');
 });
+
+if (target === 'local') {
+  await T('EXTRA S4', 'Aislamiento: otro correo recibe 404 y un service token no abre /v1/me', async (log) => {
+    const { createD1Shim, createKvShim } = await import('../helpers/d1-shim.mjs');
+    const aud = 'aud-aceptacion';
+    const signer = createAccessSigner();
+    const key = await cryptoKeyFromPublic(signer.publicKey);
+    workerMod.setAccessJwtDeps({ getCertKeys: async () => new Map([['test-kid', key]]) });
+    const env = {
+      DB: createD1Shim(join(ROOT, 'migrations')), MEDIA: createKvShim(),
+      BOT_HMAC_SECRET: 'local-test-bot-secret-0123456789abcdef', APPROVER_HMAC_SECRET: 'local-test-approver-secret-0123456789ab',
+      PUBLISHER_MODE: 'mock', PUBLISHER_PROVIDER: 'youtube',
+      ACCESS_TEAM_DOMAIN: 'team.example.com', ACCESS_AUD: aud,
+    };
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const token = (email) => signer.sign({ aud, exp, email });
+    const service = signer.sign({ aud, exp, common_name: 'bot-aceptacion', type: 'app' });
+    const call = async (method, path, jwt, body) => {
+      const res = await workerMod.default.fetch(new Request(`https://local.test${path}`, {
+        method,
+        headers: { 'cf-access-jwt-assertion': jwt, ...(body ? { 'content-type': 'application/json' } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      }), env);
+      const payload = await res.json();
+      return { status: res.status, ...payload };
+    };
+    const ana = await call('POST', '/v1/me', token('ana@example.com'), { display_name: 'Ana', time_zone: 'Europe/Madrid' });
+    assert(ana.ok, JSON.stringify(ana.error));
+    const accountId = ana.data.accounts[0].account_id;
+    const encargo = await call('POST', '/v1/me/encargos', token('ana@example.com'), {
+      account_id: accountId, kind: 'from_scratch', note: 'idea', platforms: ['youtube'],
+    });
+    assert(encargo.ok, JSON.stringify(encargo.error));
+    const bot = new OrchestratorClient({
+      baseUrl: 'https://local.test', botSecret: env.BOT_HMAC_SECRET, approverSecret: env.APPROVER_HMAC_SECRET,
+      accessHeaders: { 'cf-access-jwt-assertion': service },
+      transport: (url, init) => workerMod.default.fetch(new Request(url, init), env),
+    });
+    const sha = 'cd'.repeat(32);
+    assert((await bot.call('POST', `/v1/encargos/${encargo.data.encargo_id}/claim`)).ok, 'claim');
+    const ready = await bot.call('POST', `/v1/encargos/${encargo.data.encargo_id}/result`, { body: {
+      synthetic: true, content_hash: 'ab'.repeat(32),
+      deliverable: { r2_key: 'out/pieza', sha256: sha, mime: 'video/mp4', size_bytes: 10 },
+    } });
+    assert(ready.ok, JSON.stringify(ready.error));
+    await call('POST', '/v1/me', token('bob@example.com'), { display_name: 'Bob', time_zone: 'Europe/Madrid' });
+    for (const path of [
+      `/v1/me/encargos/${encargo.data.encargo_id}`,
+      `/v1/me/media/${sha}`,
+      `/v1/me/accounts/${accountId}/streak`,
+      `/v1/me/accounts/${accountId}/activity`,
+      `/v1/me/accounts/${accountId}/connections`,
+    ]) {
+      const foreign = await call('GET', path, token('bob@example.com'));
+      eq(foreign.status, 404, path);
+      eq(foreign.error.code, 'NOT_FOUND', path);
+    }
+    const own = await call('GET', `/v1/me/accounts/${accountId}/connections`, token('ana@example.com'));
+    eq(own.status, 200, 'conexiones propias');
+    eq(own.data.connections.length, 0, 'tabla vacía');
+    const denied = await call('GET', '/v1/me', service);
+    eq(denied.status, 403, 'service token');
+    eq(denied.error.code, 'ACCESS_DENIED', 'código');
+    log.push('bob recibe 404 en encargo, pieza, racha, actividad y conexión; service token 403 en /v1/me; conexiones propias vacías');
+  });
+}
 
 // ---------- Informe ----------
 const passed = results.filter((r) => r.pass).length;
