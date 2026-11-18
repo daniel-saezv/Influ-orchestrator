@@ -1,0 +1,37 @@
+# IaC de despliegue (sustituye deploy/cloudflare.json para wrangler deploy).
+# Secretos HMAC: solo en el panel / `wrangler secret put` (nunca aquí).
+
+name = "influ-poc-orchestrator"
+main = "src/worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "influ-poc-db"
+database_id = "ef8d5216-77f4-4921-84d3-acc5e24820aa"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "MEDIA"
+id = "2a84b1f0c32346d1b52801f6814faf99"
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+PUBLISHER_MODE = "mock"
+PUBLISHER_PROVIDER = "youtube"
+MAX_ATTEMPTS = "3"
+RETRY_BASE_SECONDS = "10"
+MAX_PUBLICATIONS_PER_RUN = "4"
+MAX_STATUS_POLLS = "3"
+DEPLOY_ENV = "poc"
+RATE_LIMIT_ENABLED = "true"
+RATE_LIMIT_HEALTH_PER_MINUTE = "120"
+RATE_LIMIT_ANON_PER_MINUTE = "60"
+ACCESS_TEAM_DOMAIN = "ancient-waterfall-b3eb.cloudflareaccess.com"
+ACCESS_AUD = "451e385e4fa58e74bc0f91981e92d9427ae34af5389d58bd62e81b36de3a8a8d"

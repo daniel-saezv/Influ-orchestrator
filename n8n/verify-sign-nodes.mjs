@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
+import { accessHeadersFromEnv } from '../bot/access-headers.mjs';
 const require = createRequire(import.meta.url);
 const cfg = loadInfluConfig();
 if (!cfg.base_url || !cfg.bot_secret || !cfg.approver_secret) {
@@ -16,7 +17,11 @@ async function run(file, nodeName, input, method) {
   const js = wf.nodes.find((n) => n.name === nodeName).parameters.jsCode;
   const fn = new Function('require', '$vars', '$input', js);
   const [{ json }] = fn(require, $vars, { first: () => ({ json: input }) });
-  const r = await fetch(json.url, { method, headers: { ...json.headers, ...(json.raw ? { 'content-type': 'application/json' } : {}) }, body: method === 'GET' ? undefined : json.raw });
+  const r = await fetch(json.url, {
+    method,
+    headers: { ...accessHeadersFromEnv(), ...json.headers, ...(json.raw ? { 'content-type': 'application/json' } : {}) },
+    body: method === 'GET' ? undefined : json.raw,
+  });
   const b = await r.json();
   console.log(`${file} · ${nodeName} -> HTTP ${r.status} ok=${b.ok}${b.error ? ' ' + b.error.code : ''}`);
   return r.status;

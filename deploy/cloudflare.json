@@ -14,7 +14,9 @@
     "DEPLOY_ENV": "poc",
     "RATE_LIMIT_ENABLED": "true",
     "RATE_LIMIT_HEALTH_PER_MINUTE": "120",
-    "RATE_LIMIT_ANON_PER_MINUTE": "60"
+    "RATE_LIMIT_ANON_PER_MINUTE": "60",
+    "ACCESS_TEAM_DOMAIN": "ancient-waterfall-b3eb.cloudflareaccess.com",
+    "ACCESS_AUD": "451e385e4fa58e74bc0f91981e92d9427ae34af5389d58bd62e81b36de3a8a8d"
   },
   "secrets": ["BOT_HMAC_SECRET", "APPROVER_HMAC_SECRET"]
 }

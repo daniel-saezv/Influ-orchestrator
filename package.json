@@ -7,7 +7,14 @@
   "scripts": {
     "test:unit": "node --test tests/unit/*.test.mjs",
     "test:acceptance": "node tests/acceptance/run.mjs",
+    "deploy:guard": "node deploy/ci-safety-guard.mjs",
+    "deploy:dry-run": "wrangler deploy --dry-run",
     "build:deploy": "node deploy/build.mjs"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "wrangler": "^4.164.0"
+  }
 }
