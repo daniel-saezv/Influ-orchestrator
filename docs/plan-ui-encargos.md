@@ -209,7 +209,7 @@ UI y API en el mismo origen, para que `CF_Authorization` sea de primera parte. `
 
 - Sin instalar: se usa Safari.
 - Instalada: el manifiesto pide `display: "standalone"`, y el icono abre la web app. [WebKit](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/), [guía de Apple](https://support.apple.com/guide/iphone/open-as-web-app-iphea86e5236/ios).
-- La prueba de la fase H entra desde el icono, completa Access dentro de la web app y llega a la guía o al selector. Las cookies no se comparten con Safari, y el login salta a otro host (`cloudflareaccess.com`). Si esa vuelta se abre en Safari y la web app se queda fuera, es un fallo de esa fase, a corregir con la navegación en la misma ventana. No se cambia el manifiesto a un marcador.
+- La prueba de la fase I entra desde el icono, completa Access dentro de la web app y llega a la guía o al selector. Las cookies no se comparten con Safari, y el login salta a otro host (`cloudflareaccess.com`). Si esa vuelta se abre en Safari y la web app se queda fuera, es un fallo de esa fase, a corregir con la navegación en la misma ventana. No se cambia el manifiesto a un marcador.
 - Sin service worker en el MVP: no hace falta para el icono y puede tragarse un `PUT`.
 - Identidad: `payload.email` del JWT que el Worker ya verifica. [Validar JWT](https://developers.cloudflare.com/cloudflare-one/identity/authorization-cookie/validating-json/).
 - Las rutas de la UI no caen en el cubo anónimo de 60/min. Hoy cualquier petición sin HMAC entra ahí (`applyHttpRateLimit`). Las de la persona usan un cubo por correo.
@@ -251,7 +251,7 @@ flowchart LR
 
 `AGENTS.md` dice que no hay UI y que no se cree `components.json` salvo para meter shadcn. La fase de UI es ese momento.
 
-Stack de la UI: Vite + React en `ui/`, Tailwind y shadcn (`Button`, `Field`, `Textarea`, `ToggleGroup`, `Progress`, `Skeleton`). Prueba visual con Vite. `wrangler dev --local` no arranca (`SERVICE_VERSION`). El iPhone real es la fase H.
+Stack de la UI: Vite + React en `ui/`, Tailwind y shadcn (`Button`, `Field`, `Textarea`, `ToggleGroup`, `Progress`, `Skeleton`). Prueba visual con Vite. `wrangler dev --local` no arranca (`SERVICE_VERSION`). El iPhone real es la fase I.
 
 ## Modelo de datos y API
 
@@ -377,14 +377,17 @@ Este documento es la fase 0. Cada fase siguiente va en su PR, con pruebas. Un so
 | E | Hora fuera de la huella y programación. | `hash.js`, `wf02`, `wf03`, pruebas de dominio | Después de A |
 | F | R2 Standard: cada parte un `put` con `sha256` comprobado por R2, tope 150 MB, contadores de 30 días, borrado inmediato y ciclo de vida solo para huérfanos, sin Infrequent Access. El usuario ha completado el alta antes de desplegar el binding. | Adaptador R2, `src/worker.js`, pruebas de tope, checksum y borrado | Después de A. No a la vez que E |
 | G | UI real en los assets del Worker y manifiesto PWA, sin service worker. | `ui/**`, `wrangler.toml` | Después de A, B, C y F |
-| H | iPhone: Safari, icono, Access dentro de la PWA, cámara, galería, audio, reanudación, previa 9:16, selector de cuentas. | Ajustes de `ui/` si la prueba lo pide | Después de G |
-| I | Service worker de la PWA: caché del shell y de los datos para usarla sin red o con mala cobertura, y notificaciones push en iPhone (hace falta la app en la pantalla de inicio). Pendiente, opcional y aplazable. | `ui/**` | Después de H. Se puede ir atrasando indefinidamente. |
+| H | Rutas HMAC del bot, las de «API del bot»: `GET /v1/encargos?status=queued`, `POST /v1/encargos/:id/claim` y `POST /v1/encargos/:id/result`. Autenticación HMAC `bot`, `head` de R2 y SHA-256 según «Integridad», flag `synthetic` y `audit_log`. Adaptar el bucle de `bot/influ.mjs`: cola vacía, sin Imagine. Solo backend; puede ir en paralelo con G. | `src/worker.js`, `bot/influ.mjs`, `tests/` | Después de A y F. En paralelo con G |
+| I | iPhone: Safari, icono, Access dentro de la PWA, cámara, galería, audio, reanudación, previa 9:16, selector de cuentas. | Ajustes de `ui/` si la prueba lo pide | Después de G |
+| J | Service worker de la PWA: caché del shell y de los datos para usarla sin red o con mala cobertura, y notificaciones push en iPhone (hace falta la app en la pantalla de inicio). Pendiente, opcional y aplazable. | `ui/**` | Después de I. Se puede ir atrasando indefinidamente. |
 
 OAuth, tokens y adaptadores LIVE no están en estas fases. La tabla `platform_connections` se crea vacía en A para no migrar dos veces.
 
 La fase F prueba, además del tope y del checksum: `changes` borra la pieza descartada y la versión anterior, baja los bytes y deja el origen, de modo que una segunda generación lo vuelve a leer; cancelar borra origen y versiones y deja los bytes a cero para ese encargo; cerrar en `COMPLETED`, `FAILED` o `PARTIALLY_COMPLETED` borra la pieza que quedaba y el origen. Las operaciones de clase A y B de la ventana no bajan. Un `DeleteObject` que falla deja la fila y los bytes, y el cron lo reintenta.
 
-La fase I es la última y queda pendiente: es opcional y se puede ir atrasando indefinidamente. Añade un service worker a la PWA para dos cosas: usar la interfaz sin conexión o con mala red, guardando en caché el shell de la UI y los datos; y enviar notificaciones push en iPhone (hace falta tener la PWA instalada en la pantalla de inicio y un service worker), por ejemplo avisos de encargos. El riesgo a tratar es servir versiones antiguas de la UI desde la caché, así que hace falta una estrategia de versionado y actualización. Por eso se dejó fuera del MVP y de la fase G.
+La fase H implementa en el Worker la API ya descrita en «API del bot», con firma HMAC `bot`. En `result` se aplican las comprobaciones de «Integridad» (`head` de R2 y SHA-256), se fija `synthetic` y queda constancia en `audit_log`. El bucle de `bot/influ.mjs` usa esas rutas: si la cola está vacía, termina esa vuelta sin Imagine. Es solo backend y puede ir a la vez que G.
+
+La fase J es la última y queda pendiente: es opcional y se puede ir atrasando indefinidamente. Añade un service worker a la PWA para dos cosas: usar la interfaz sin conexión o con mala red, guardando en caché el shell de la UI y los datos; y enviar notificaciones push en iPhone (hace falta tener la PWA instalada en la pantalla de inicio y un service worker), por ejemplo avisos de encargos. El riesgo a tratar es servir versiones antiguas de la UI desde la caché, así que hace falta una estrategia de versionado y actualización. Por eso se dejó fuera del MVP y de la fase G.
 
 Pruebas de código, cuando existan: `npm run test:unit`, `npm run test:acceptance -- --target local`, `npm run deploy:guard`. Este PR no tiene UI que abrir.
 
@@ -407,7 +410,7 @@ En cuanto Cloudflare permita límites de gasto nativos para R2, hay que revisar 
 3. **Un generador para todos.** La cola es una. Dos encargos esperan turno. La pantalla lo dice. No se contrata otro bot.
 4. **El bucle del bot tiene que ser el de la suscripción actual.** Consultar el Worker es una petición HMAC, gratis dentro del cupo del Worker. Imagine solo corre con un encargo reclamado. Si despertar ese bucle pasara a cobrarse fuera de la suscripción, habría que parar: no entra en este plan.
 5. **Access, 50 asientos.** El 51 no entra.
-6. **La PWA no comparte cookies con Safari.** La fase H tiene que demostrar el login de Access desde el icono. Si el salto a `cloudflareaccess.com` abre Safari, se corrige ahí.
+6. **La PWA no comparte cookies con Safari.** La fase I tiene que demostrar el login de Access desde el icono. Si el salto a `cloudflareaccess.com` abre Safari, se corrige ahí.
 7. **iOS mata la subida.** Hay que volver a elegir el mismo archivo. El texto de la pantalla lo dice.
 8. **LIVE sigue bloqueado.** Los simuladores no abren red. La revisión de YouTube, Meta y TikTok no publica un precio, pero puede rechazar la app o dejar TikTok en privado y YouTube con tokens de 7 días mientras la app esté en Testing. Eso es posterior al MVP.
 9. **Instagram y una URL pública.** El diseño futuro usa la subida reanudable documentada para Facebook Login for Business, no una URL abierta del bucket. Hasta entonces no hay publicación real.
