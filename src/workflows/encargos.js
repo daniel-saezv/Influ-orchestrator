@@ -174,7 +174,13 @@ export async function decideEncargo(repo, { email, encargoId, body, now, r2 }) {
     return { encargo_id: encargo.encargo_id, status: 'approved', version };
   }
   const started = await repo.beginDiscard({
-    encargoId: encargo.encargo_id, accountId: encargo.account_id, version, now,
+    encargoId: encargo.encargo_id,
+    accountId: encargo.account_id,
+    version,
+    note: typeof body.note === 'string' && body.note.trim() && body.note.length <= 4000
+      ? `${encargo.note ? `${encargo.note}\n\n` : ''}Cambios: ${body.note.trim()}`.slice(0, 4000)
+      : null,
+    now,
   });
   if (!started.changed) throw err('CONFLICT', 'Este encargo no admite cambios', 409);
   if (encargo.batch_id) await repo.invalidateBatchForChanges({ batchId: encargo.batch_id, now });

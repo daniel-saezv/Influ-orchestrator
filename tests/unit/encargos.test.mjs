@@ -150,9 +150,11 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   assert.equal(serviceMe.error.code, 'ACCESS_DENIED');
 
   const changes = await json(await call('POST', `/v1/me/encargos/${encargoId}/decision`, person('ana@example.com'), {
-    decision: 'changes', version: 1, content_hash: HASH,
+    decision: 'changes', version: 1, content_hash: HASH, note: 'Más corto',
   }));
   assert.equal(changes.data.status, 'queued');
+  const changedEncargo = await json(await call('GET', `/v1/me/encargos/${encargoId}`, person('ana@example.com')));
+  assert.match(changedEncargo.data.note, /Cambios: Más corto$/);
   assert.equal(changes.data.bytes_released, 1000);
   assert.equal(await repo.storedBytes('global'), 500);
   const assets = shim._raw.prepare('SELECT role FROM encargo_assets WHERE encargo_id = ?').all(encargoId);

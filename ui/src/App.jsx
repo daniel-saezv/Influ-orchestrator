@@ -158,47 +158,59 @@ function App({ api = realApi }) {
       platforms: platforms.map((platform) => platform.toLowerCase()),
     }))
     if (!created) return
-    setEncargo(created)
-    let uploadSessionId
+    let activeEncargo = created
+    setEncargo(activeEncargo)
     if (kind === 'edit') {
-      const source = files.length === 1 ? files[0] : new Blob(files, { type: files[0]?.type || 'application/octet-stream' })
-      const total = source.size
       if (files.some((file) => file.size > MAX_FILE_BYTES)) {
         setError('Ese archivo supera los 150 MB. Elige uno más pequeño.')
         return
       }
-      const interruptedId = window.localStorage.getItem('influ-upload-session')
-      const sourceSha256 = await sha256Hex(source)
-      const upload = await run(() => api.createUpload({
-        encargo_id: created.id,
-        size_bytes: total,
-        mime: source.type || 'application/octet-stream',
-        sha256: sourceSha256,
-        resume_id: interruptedId,
-      }))
-      if (!upload) return
-      uploadSessionId = upload.upload_id
-      window.localStorage.setItem('influ-upload-session', uploadSessionId)
-      const allBlobs = (() => {
-        const parts = []
-        for (let offset = 0; offset < source.size; offset += 5 * 1024 * 1024) {
-          parts.push(source.slice(offset, offset + 5 * 1024 * 1024))
+      for (const [fileIndex, source] of files.entries()) {
+        const interruptedId = fileIndex === 0
+          ? window.localStorage.getItem('influ-upload-session')
+          : null
+        const sourceSha256 = await sha256Hex(source)
+        const uploadBody = {
+          encargo_id: activeEncargo.id,
+          size_bytes: source.size,
+          mime: source.type || 'application/octet-stream',
+          sha256: sourceSha256,
         }
-        return parts
-      })()
-      const uploadedParts = new Set(upload.uploaded_parts ?? [])
-      for (let index = 0; index < allBlobs.length; index += 1) {
-        if (uploadedParts.has(index + 1)) continue
-        const uploaded = await run(() => api.uploadPart(uploadSessionId, index + 1, allBlobs[index]))
-        if (!uploaded) {
-          setScreen('source')
-          return
+        let upload = await run(() => api.createUpload({
+          ...uploadBody,
+          resume_id: interruptedId,
+        }))
+        if (!upload && interruptedId) {
+          window.localStorage.removeItem('influ-upload-session')
+          upload = await run(() => api.createUpload(uploadBody))
         }
-        setUploadProgress(Math.round(((index + 1) / allBlobs.length) * 100))
+        if (!upload) return
+        if (upload.resumed && upload.encargo_id && upload.encargo_id !== activeEncargo.id) {
+          await api.cancelEncargo(activeEncargo.id)
+          const resumed = await api.getEncargo(upload.encargo_id)
+          if (!resumed.ok) return
+          activeEncargo = resumed.data
+          setEncargo(activeEncargo)
+        }
+        const uploadSessionId = upload.upload_id
+        window.localStorage.setItem('influ-upload-session', uploadSessionId)
+        const partCount = Math.ceil(source.size / (5 * 1024 * 1024))
+        const uploadedParts = new Set(upload.uploaded_parts ?? [])
+        for (let index = 0; index < partCount; index += 1) {
+          if (uploadedParts.has(index + 1)) continue
+          const start = index * 5 * 1024 * 1024
+          const part = source.slice(start, Math.min(start + 5 * 1024 * 1024, source.size))
+          const uploaded = await run(() => api.uploadPart(uploadSessionId, index + 1, part))
+          if (!uploaded) {
+            setScreen('source')
+            return
+          }
+          setUploadProgress(Math.round(((index + 1) / partCount) * 100))
+        }
+        const completed = await run(() => api.completeUpload(uploadSessionId, { sha256: sourceSha256 }))
+        if (!completed) return
+        window.localStorage.removeItem('influ-upload-session')
       }
-      const completed = await run(() => api.completeUpload(uploadSessionId, { sha256: sourceSha256 }))
-      if (!completed) return
-      window.localStorage.removeItem('influ-upload-session')
     }
     setScreen('preparing')
   }
