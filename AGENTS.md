@@ -10,7 +10,7 @@ El orquestador recibe un lote, lo deja a revisión, exige una aprobación ligada
 
 ## Stack y estructura
 
-JavaScript ESM (`"type": "module"`), Node `>=22` (las pruebas usan `node:sqlite`). Sin bundler de aplicación ni framework de UI. El runtime de producción es un Cloudflare Worker (plan gratuito) definido en `wrangler.toml`: Worker `influ-poc-orchestrator`, entrada `src/worker.js`, D1 `influ-poc-db`, KV `influ-poc-media`, cron `*/15 * * * *`, `workers_dev = true`. Wrangler 4.164.0 es devDependency.
+JavaScript ESM (`"type": "module"`), Node `>=22` (las pruebas usan `node:sqlite`). La API y el runtime de producción son un Cloudflare Worker (plan gratuito) definido en `wrangler.toml`: Worker `influ-poc-orchestrator`, entrada `src/worker.js`, D1 `influ-poc-db`, KV `influ-poc-media`, cron `*/15 * * * *`, `workers_dev = true`. Wrangler 4.164.0 es devDependency. La UI independiente de fase B vive en `ui/`: Vite + React, Tailwind y componentes shadcn (`Button`, `Field`, `Textarea`, `ToggleGroup`, `Progress`, `Skeleton`).
 
 | Ruta | Qué es |
 |---|---|
@@ -24,10 +24,11 @@ JavaScript ESM (`"type": "module"`), Node `>=22` (las pruebas usan `node:sqlite`
 | `n8n/` | Plantillas WF-01..04 importables. No hay instancia n8n; no se ejecutan en CI. |
 | `deploy/` | Guardia de modo mock, sincronización D1, smoke de `/v1/health` y el generador legacy `build.mjs`. |
 | `tests/` | Unitarios (`node:test`) y aceptación local/remota. El shim D1 está en `tests/helpers/d1-shim.mjs`. |
+| `ui/` | SPA mobile-first de encargos. Tiene su propio `package.json`, lockfile, `components.json`, pruebas Vitest y cliente fingido reemplazable; aún no es un asset del Worker. |
 | `docs/` | Arquitectura, contratos, datos, seguridad, instalación, despliegue, n8n, YouTube LIVE. |
 | `reports/` | Informes ya generados. La aceptación local reescribe `reports/acceptance-local.*`; no lo versiones si solo has relanzado las pruebas. |
 
-No hay `components.json`, Tailwind ni aplicación web. shadcn/ui no forma parte del producto; la skill y el MCP quedan preparados en [Agentes](#agentes-cursor-y-copilot).
+`ui/components.json` configura shadcn en la aplicación Vite; no se mueve a la raíz. La integración con los assets del Worker corresponde a una fase posterior.
 
 ## Comandos
 
@@ -36,6 +37,7 @@ Comprobados en este clon el 2026-11-18 (Node v22.23.4, npm 10.9.9):
 - Instalación: `npm ci` (41 paquetes auditados, 0 vulnerabilidades). Deja Wrangler 4.164.0.
 - Build: no hay build de aplicación. `npm run deploy:dry-run` ejecuta `wrangler deploy --dry-run`, empaqueta el Worker (81.29 KiB / gzip 22.39 KiB en esta ejecución) y sale sin desplegar. `npm run build:deploy` sin argumentos solo imprime el uso del generador legacy (`worker|migrate|secrets`); no es el despliegue canónico.
 - Tests: `npm run test:unit` (26 pruebas, 0 fallos) y `npm run test:acceptance -- --target local` (16/16 OK, en memoria). `npm run deploy:guard` exige `PUBLISHER_MODE=mock` y `LIVE_ENABLED_IN_BUILD=false`.
+- UI: `cd ui && npm ci && npm run dev` arranca Vite. La validación aislada es `cd ui && npm run lint && npm run test:run && npm run build`.
 - Arranque: no hay `npm start`. El proceso que sirve la API es el Worker desplegado en Cloudflare (`docs/despliegue-ci.md`). En local, el sustituto que sí arranca la API es la aceptación: `npm run test:acceptance -- --target local`. `npx wrangler dev --local --port 8787` no llega a escuchar: workerd rechaza el export `SERVICE_VERSION` (`Incorrect type for map entry 'SERVICE_VERSION'`). No está corregido. `node bot/influ.mjs` sin entorno termina con código 2 y pide `INFLU_BASE_URL`, `INFLU_BOT_HMAC_SECRET` e `INFLU_APPROVER_HMAC_SECRET`.
 
 `ffprobe` es opcional para el CLI del bot (metadatos de vídeo). En esta máquina está en `/usr/bin/ffprobe`. Los tests no lo necesitan.
@@ -50,6 +52,7 @@ La aceptación remota (`--target remote`), `node n8n/verify-sign-nodes.mjs` y `n
 - `wrangler deploy` conserva los secrets ya cargados en el Worker. Las migraciones D1 ya aplicadas a mano se sincronizan con `deploy/d1-migrations-sync.mjs` antes de `wrangler d1 migrations apply` (lo hace el job de `main`).
 - Pruebas con `node:test`, sin framework añadido. La aceptación local no toca la cuenta de Cloudflare. `wrangler deploy --dry-run` y `wrangler dev` escriben estado en `.wrangler/`; está en `.gitignore`.
 - Plantillas n8n: no las regeneres con `node n8n/build-workflows.mjs` salvo que el cambio sea ese generador; reescribe UUID en `n8n/workflows/`.
+- La UI usa `ui/src/api/fakeApi.js` durante la fase B. El cliente real debe sustituir esa frontera, conservar `credentials: "same-origin"` y no guardar secretos HMAC, cuerpos ni tokens en el navegador.
 
 ## CI/CD
 
@@ -80,7 +83,7 @@ Esa ruta la leen los dos:
 
 El CLI `skills` instala Cursor y GitHub Copilot en ese mismo directorio (`npx skills add https://github.com/shadcn-ui/ui --skill shadcn --agent cursor github-copilot`). No hay copia en `.cursor/skills` ni en `.github/skills`.
 
-La documentación de la skill dice que se activa al existir `components.json`. Este repo no lo tiene y no se ha ejecutado `shadcn init`: no hay UI que inicializar. `npx shadcn@latest info --json` (CLI 4.23.0) termina bien y devuelve `"config": null` y `"components": []`. Según `mcp.md` de la skill, `get_project_registries` falla sin `components.json`; el registro `@shadcn` sigue disponible. No crees `components.json` ni añadas componentes en una tarea que no sea meter shadcn en el producto.
+La documentación de la skill se aplica ahora dentro de `ui/`, donde vive `components.json`. Mantén los componentes fuente de shadcn bajo `ui/src/components/ui/`. Para usar el MCP desde la raíz, ejecuta el CLI o configura su servidor con `ui/` como proyecto; no crees otro `components.json` en la raíz.
 
 ### MCP de Cursor
 
@@ -113,7 +116,7 @@ Ruta: Settings del repo → Code planning and automation → Copilot → MCP ser
 }
 ```
 
-No usa secretos. `get_project_registries` seguirá fallando hasta que exista `components.json`.
+No usa secretos. Ahora `components.json` está en `ui/`, no en la raíz del repositorio.
 
 ### Entorno del coding agent
 
