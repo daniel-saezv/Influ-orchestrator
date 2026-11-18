@@ -62,8 +62,8 @@ async function cf(accountId, token, path, init = {}) {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok || body.success === false) {
-    const code = body.errors?.[0]?.code ?? body.errors?.[0]?.error ?? 'error';
-    const error = new Error(`Cloudflare Access HTTP ${response.status} ${code}`);
+    const detail = body.errors?.[0]?.message || body.errors?.[0]?.error || body.errors?.[0]?.code || 'error';
+    const error = new Error(`Cloudflare Access HTTP ${response.status} ${String(detail).slice(0, 180)}`);
     error.status = response.status;
     throw error;
   }
@@ -86,8 +86,8 @@ async function workerId(accountId, token) {
   const body = await cf(accountId, token, `/accounts/${accountId}/workers/scripts`);
   const rows = body.result ?? [];
   const match = rows.find((row) => row === WORKER_SCRIPT_NAME || row?.id === WORKER_SCRIPT_NAME || row?.name === WORKER_SCRIPT_NAME);
-  const id = typeof match === 'object' ? match?.tag ?? match?.id : null;
-  if (!id || id === WORKER_SCRIPT_NAME) throw new Error('No se encontró el id del Worker');
+  const id = typeof match === 'object' ? match?.tag : null;
+  if (!id) throw new Error(`No se encontró el id del Worker (scripts=${rows.length})`);
   return id;
 }
 
@@ -113,7 +113,7 @@ async function createPreviewApp(accountId, token, { worker, policies }) {
       destinations: [{ type: 'preview_worker', worker_id: worker }],
     },
   ];
-  let last;
+  const failures = [];
   for (const attempt of attempts) {
     try {
       const created = await cf(accountId, token, `/accounts/${accountId}/access/apps`, {
@@ -122,11 +122,11 @@ async function createPreviewApp(accountId, token, { worker, policies }) {
       });
       return created.result;
     } catch (error) {
-      last = error;
-      if (error.status === 401 || error.status === 403) throw error;
+      failures.push(error.message);
+      if (error.status === 401 || error.status === 403) break;
     }
   }
-  throw last;
+  throw new Error(failures.join(' | '));
 }
 
 async function syncPreviewPolicies(accountId, token, preview, policies) {
@@ -181,10 +181,7 @@ const isDirectRun = process.argv[1]
   && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
 if (isDirectRun) {
   main().catch((error) => {
-    const status = error.status === 401 || error.status === 403
-      ? ' El token necesita el permiso Access: Apps and Policies Write.'
-      : '';
-    console.error(`::error::No se pudo proteger la preview con Access.${status}`);
+    console.error(`::error::No se pudo proteger la preview con Access: ${error.message}`);
     process.exit(1);
   });
 }
