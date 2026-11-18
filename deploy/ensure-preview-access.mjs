@@ -12,6 +12,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const PRODUCTION_ACCESS_AUD = '451e385e4fa58e74bc0f91981e92d9427ae34af5389d58bd62e81b36de3a8a8d';
 export const PRODUCTION_ACCESS_DOMAIN = 'influ-poc-orchestrator.gamu-development.workers.dev';
+export const PRODUCTION_ACCESS_APP_ID = '2cd5e566-24f5-4c83-80c2-cc5633ccd812';
+/** Políticas reutilizables de la app de producción: amigos y token de servicio. */
+export const PRODUCTION_POLICY_IDS = [
+  'b2919b01-8553-4b67-985d-a4b5a8f43e20',
+  'd1589af8-f41d-472e-a295-ff41abd6cbb2',
+];
 export const PREVIEW_ACCESS_HOST = '*-influ-poc-orchestrator.gamu-development.workers.dev';
 export const PREVIEW_ACCESS_APP_NAME = 'influ-poc-orchestrator previews';
 export const WORKER_SCRIPT_NAME = 'influ-poc-orchestrator';
@@ -165,19 +171,28 @@ export async function ensurePreviewAccess(accountId, token) {
     }
   }
   if (!production) {
-    const seen = apps.map((app) => app.name || app.id).join(', ') || 'ninguna';
-    throw new Error(`No está la aplicación Access de producción (${seen})`);
+    try {
+      const body = await cf(accountId, token, `/accounts/${accountId}/access/apps/${PRODUCTION_ACCESS_APP_ID}`);
+      production = body.result;
+    } catch (error) {
+      if (error.status !== 403 && error.status !== 404) throw error;
+    }
   }
-  const policies = policyIds(production);
-  if (policies.length === 0) throw new Error('La aplicación de producción no tiene políticas');
+  const policies = production ? policyIds(production) : [];
+  const policySet = policies.length > 0 ? policies : [...PRODUCTION_POLICY_IDS];
   const worker = await workerId(accountId, token);
-  let preview = apps.find((app) => app.id !== production.id && coversPreview(app, worker));
-  if (!preview) preview = await createPreviewApp(accountId, token, { worker, policies });
-  if (!preview?.id || preview.id === production.id) {
+  const productionId = production?.id;
+  let preview = apps.find((app) => app.id !== productionId && coversPreview(app, worker));
+  if (!preview) preview = await createPreviewApp(accountId, token, { worker, policies: policySet });
+  if (!preview?.id || preview.id === productionId) {
     throw new Error('La preview no puede reutilizar la app de producción');
   }
-  preview = await syncPreviewPolicies(accountId, token, preview, policies);
-  if (!preview.aud || preview.id === production.id) {
+  try {
+    preview = await syncPreviewPolicies(accountId, token, preview, policySet);
+  } catch (error) {
+    if (error.status !== 403 || !preview.aud) throw error;
+  }
+  if (!preview.aud || preview.id === productionId) {
     throw new Error('La aplicación de preview no quedó separada de producción');
   }
   return preview.aud;
