@@ -148,10 +148,26 @@ async function syncPreviewPolicies(accountId, token, preview, policies) {
   return updated.result;
 }
 
+async function fullApp(accountId, token, app) {
+  if (app?.aud && (app.domain || app.destinations)) return app;
+  const body = await cf(accountId, token, `/accounts/${accountId}/access/apps/${app.id}`);
+  return body.result;
+}
+
 export async function ensurePreviewAccess(accountId, token) {
   const apps = await listApps(accountId, token);
-  const production = apps.find((app) => app.aud === PRODUCTION_ACCESS_AUD || app.domain === PRODUCTION_ACCESS_DOMAIN);
-  if (!production) throw new Error('No está la aplicación Access de producción');
+  let production = null;
+  for (const app of apps) {
+    const full = await fullApp(accountId, token, app);
+    if (full.aud === PRODUCTION_ACCESS_AUD || full.domain === PRODUCTION_ACCESS_DOMAIN || full.name === WORKER_SCRIPT_NAME) {
+      production = full;
+      break;
+    }
+  }
+  if (!production) {
+    const seen = apps.map((app) => app.name || app.id).join(', ') || 'ninguna';
+    throw new Error(`No está la aplicación Access de producción (${seen})`);
+  }
   const policies = policyIds(production);
   if (policies.length === 0) throw new Error('La aplicación de producción no tiene políticas');
   const worker = await workerId(accountId, token);
