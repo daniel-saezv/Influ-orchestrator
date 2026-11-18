@@ -137,6 +137,9 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   assert.equal(ownMedia.status, 200);
   assert.equal(ownMedia.headers.get('x-content-sha256'), SHA);
   assert.deepEqual(new Uint8Array(await ownMedia.arrayBuffer()), mediaBytes);
+  const ownEncargo = await json(await call('GET', `/v1/me/encargos/${encargoId}`, person('ana@example.com')));
+  assert.equal(ownEncargo.data.preview.sha256, SHA);
+  assert.equal(ownEncargo.data.preview.media_url, `/v1/me/media/${SHA}`);
   const ownConn = await json(await call('GET', `/v1/me/accounts/${accountId}/connections`, person('ana@example.com')));
   assert.equal(ownConn.status, 200);
   assert.deepEqual(ownConn.data.connections, []);
@@ -147,9 +150,11 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   assert.equal(serviceMe.error.code, 'ACCESS_DENIED');
 
   const changes = await json(await call('POST', `/v1/me/encargos/${encargoId}/decision`, person('ana@example.com'), {
-    decision: 'changes', version: 1, content_hash: HASH,
+    decision: 'changes', version: 1, content_hash: HASH, note: 'Más corto',
   }));
   assert.equal(changes.data.status, 'queued');
+  const changedEncargo = await json(await call('GET', `/v1/me/encargos/${encargoId}`, person('ana@example.com')));
+  assert.match(changedEncargo.data.note, /Cambios: Más corto$/);
   assert.equal(changes.data.bytes_released, 1000);
   assert.equal(await repo.storedBytes('global'), 500);
   const assets = shim._raw.prepare('SELECT role FROM encargo_assets WHERE encargo_id = ?').all(encargoId);

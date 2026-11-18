@@ -33,10 +33,16 @@ export async function createUpload(repo, { email, body, now, r2 }) {
     if (!UUID_RE.test(body.resume_id)) throw NOT_FOUND();
     const session = await repo.uploadForUser(user.user_id, body.resume_id);
     if (!session || session.completed_at) throw NOT_FOUND();
+    if (Number(body.size_bytes) !== Number(session.size_bytes)
+      || body.mime !== session.mime
+      || (body.sha256 && session.file_sha256 && body.sha256 !== session.file_sha256)) {
+      throw err('CONFLICT', 'La subida a medias no corresponde a este archivo', 409);
+    }
     const parts = parseParts(session.part_hashes_json);
     return {
       __http: 201,
       upload_id: session.upload_id,
+      encargo_id: session.encargo_id,
       part_size: PART_SIZE_BYTES,
       part_count: session.expected_parts,
       uploaded_parts: Object.keys(parts).map(Number).sort((a, b) => a - b),
@@ -48,9 +54,6 @@ export async function createUpload(repo, { email, body, now, r2 }) {
   if (!encargo) throw NOT_FOUND();
   if (encargo.status !== 'draft' && encargo.status !== 'queued') {
     throw err('CONFLICT', 'Este encargo no admite una subida', 409);
-  }
-  if (await repo.countAssets(encargo.encargo_id, 'source')) {
-    throw err('CONFLICT', 'El encargo ya tiene origen', 409);
   }
   if (await repo.openUploadForEncargo(encargo.encargo_id)) {
     throw err('CONFLICT', 'Ya hay una subida abierta para este encargo', 409);
@@ -85,6 +88,7 @@ export async function createUpload(repo, { email, body, now, r2 }) {
   return {
     __http: 201,
     upload_id: uploadId,
+    encargo_id: body.encargo_id,
     part_size: PART_SIZE_BYTES,
     part_count: count,
     uploaded_parts: [],

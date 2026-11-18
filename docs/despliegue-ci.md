@@ -2,7 +2,7 @@
 
 ## Infraestructura como código
 
-El Worker se define en [`wrangler.toml`](../wrangler.toml) (nombre, `main`, D1, KV, cron, vars, Access). **No** incluye secretos HMAC.
+El Worker se define en [`wrangler.toml`](../wrangler.toml) (nombre, `main`, D1, KV, cron, vars, Access y assets `ui/dist`). **No** incluye secretos HMAC.
 
 Despliegue automático en **push a `main`** y **workflow_dispatch** (workflow `deploy`). En **pull requests del mismo repositorio** hay validación, `wrangler deploy --dry-run` y una preview (`wrangler preview`) contra `influ-poc-db-preview`. Las PRs de forks no suben preview ni reciben los secretos de Cloudflare.
 
@@ -43,10 +43,12 @@ Opcional: `INFLU_BASE_URL` si la URL workers.dev no sigue el patrón `https://in
 2. gitleaks (`.gitleaks.toml`)
 3. `node deploy/ci-safety-guard.mjs` — exige `PUBLISHER_MODE=mock` y `LIVE_ENABLED_IN_BUILD=false`
 4. Tests unitarios y acceptance local
-5. `wrangler deploy --dry-run`
-6. *(solo main)* Sincronización idempotente D1: `deploy/d1-migrations-sync.mjs` + `wrangler d1 execute` + `wrangler d1 migrations apply --remote`
-7. `wrangler deploy`
-8. Smoke: sin token → 302/403; con service token → `/v1/health` 200 y `live_enabled_in_build: false`
+5. En `ui/`: `npm ci`, `npm run lint`, `npm run test:run` y `npm run build`
+6. `wrangler deploy --dry-run`
+7. *(solo main o preview)* Construcción de `ui/dist` antes del comando Wrangler del job
+8. *(solo main)* Sincronización idempotente D1: `deploy/d1-migrations-sync.mjs` + `wrangler d1 execute` + `wrangler d1 migrations apply --remote`
+9. `wrangler deploy` o `wrangler preview`, que publica Worker y assets
+10. Smoke: sin token → 302/403; con service token → `/v1/health` 200 y `live_enabled_in_build: false`
 
 El job `deploy` es el único que ejecuta `wrangler d1 migrations apply influ-poc-db`, `deploy/ensure-r2-bucket.mjs production` y `wrangler deploy`. El job `ci` no crea el bucket de producción: en una PR no tiene `CLOUDFLARE_API_TOKEN` ni `CLOUDFLARE_ACCOUNT_ID`.
 
@@ -60,7 +62,7 @@ El job `preview` corre en `pull_request` cuando la cabeza está en este reposito
 2. Escribe ese uuid en `[[previews.d1_databases]]` de `wrangler.toml` y en `wrangler.preview-d1.toml` (solo en el checkout, no hace commit).
 3. `npx wrangler d1 migrations apply influ-poc-db-preview --remote --config wrangler.preview-d1.toml` aplica las migraciones **de la rama** a esa base. `wrangler.preview-d1.toml` no declara `influ-poc-db`.
 4. `deploy/ensure-r2-bucket.mjs preview` crea o reutiliza `influ-poc-media-preview`. Nunca escribe en `influ-poc-media`.
-5. `npx wrangler preview --name pr-<número> --json` sube la preview. La URL sale en un solo comentario (`<!-- influ-preview -->`) junto al SHA de cabeza. Cada push actualiza ese comentario.
+5. `npx wrangler preview --name pr-<número> --json` sube el Worker y los assets ya construidos de `ui/dist`. La URL sale en un solo comentario (`<!-- influ-preview -->`) junto al SHA de cabeza. Cada push actualiza ese comentario.
 6. Sin cookie, `GET /health` y `GET /v1/health` deben responder 302 hacia `*.cloudflareaccess.com`. El job no publica la preview si la petición llega al Worker.
 
 `workers_dev` y `preview_urls` están activos. El bloque `[previews]` copia las vars de producción (modo mock y el dominio de Access), el binding `DB` de `influ-poc-db-preview` y `MEDIA_R2` de `influ-poc-media-preview`. `ACCESS_AUD` de preview es el de la aplicación Access `influu-poc-orchestrator previews` (`cfd654f0-28e2-4bb8-b6f5-6e247837638f`), distinta de la de producción. Esa aplicación se gestiona fuera de la CI: cubre `*-influ-poc-orchestrator.gamu-development.workers.dev` y las previews de este Worker, con las mismas políticas reutilizables que producción. El token de CI no la crea ni la modifica, y no necesita permisos de Access. El Worker sigue exigiendo `Cf-Access-Jwt-Assertion`. El issuer sigue siendo `ACCESS_TEAM_DOMAIN`. No copia el cron ni el KV `MEDIA`: la preview no dispara el despacho de producción y no escribe en el namespace de media del bot. `/v1/health` no usa KV.
@@ -109,6 +111,10 @@ npm ci
 npm run test:unit
 npm run test:acceptance -- --target local
 npm run deploy:guard
+npm ci --prefix ui
+npm --prefix ui run lint
+npm --prefix ui run test:run
+npm --prefix ui run build
 npm run deploy:dry-run
 ```
 

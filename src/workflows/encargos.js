@@ -26,7 +26,10 @@ function publicUser(user, accounts) {
   };
 }
 
-function publicEncargo(row) {
+function publicEncargo(row, assets = []) {
+  const deliverable = assets
+    .filter((asset) => asset.role === 'deliverable' && asset.version === row.version && !asset.delete_pending)
+    .at(-1);
   return {
     encargo_id: row.encargo_id,
     account_id: row.account_id,
@@ -39,6 +42,13 @@ function publicEncargo(row) {
     synthetic: row.synthetic,
     publish_at: row.publish_at,
     batch_id: row.batch_id,
+    preview: deliverable ? {
+      sha256: deliverable.sha256,
+      mime: deliverable.mime,
+      size_bytes: deliverable.size_bytes,
+      version: deliverable.version,
+      media_url: `/v1/me/media/${deliverable.sha256}`,
+    } : null,
   };
 }
 
@@ -114,7 +124,8 @@ export async function createEncargo(repo, { email, body, now }) {
 }
 
 export async function getEncargo(repo, { email, encargoId }) {
-  return publicEncargo(await requireOwnedEncargo(repo, email, encargoId));
+  const encargo = await requireOwnedEncargo(repo, email, encargoId);
+  return publicEncargo(encargo, await repo.listAssets(encargoId));
 }
 
 async function assertBatchHash(repo, batchId) {
@@ -163,7 +174,13 @@ export async function decideEncargo(repo, { email, encargoId, body, now, r2 }) {
     return { encargo_id: encargo.encargo_id, status: 'approved', version };
   }
   const started = await repo.beginDiscard({
-    encargoId: encargo.encargo_id, accountId: encargo.account_id, version, now,
+    encargoId: encargo.encargo_id,
+    accountId: encargo.account_id,
+    version,
+    note: typeof body.note === 'string' && body.note.trim() && body.note.length <= 4000
+      ? `${encargo.note ? `${encargo.note}\n\n` : ''}Cambios: ${body.note.trim()}`.slice(0, 4000)
+      : null,
+    now,
   });
   if (!started.changed) throw err('CONFLICT', 'Este encargo no admite cambios', 409);
   if (encargo.batch_id) await repo.invalidateBatchForChanges({ batchId: encargo.batch_id, now });

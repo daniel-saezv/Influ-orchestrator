@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it } from 'vitest'
 import App from '../src/App.jsx'
-import { configureFakeApi, getFakeApiState, resetFakeApi } from '../src/api/fakeApi.js'
+import fakeApi, { configureFakeApi, getFakeApiState, resetFakeApi } from '../src/api/fakeApi.js'
 
 describe('mobile creation flow', () => {
   beforeEach(() => {
@@ -14,7 +14,7 @@ describe('mobile creation flow', () => {
 
   it('guides a first-time user from the idea to three MOCK platforms and activity', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    render(<App api={fakeApi} />)
 
     await user.click(screen.getByRole('button', { name: 'Entrar' }))
     expect(await screen.findByRole('heading', { name: 'Así de simple' })).toBeInTheDocument()
@@ -46,7 +46,7 @@ describe('mobile creation flow', () => {
   it('does not show an AI notice for a plain crop', async () => {
     resetFakeApi({ onboarded: true })
     const user = userEvent.setup()
-    render(<App />)
+    render(<App api={fakeApi} />)
     await user.click(screen.getByRole('button', { name: 'Entrar' }))
     await user.click(await screen.findByRole('button', { name: /Alex Studio/ }))
     await user.click(screen.getByRole('button', { name: /Editar mis vídeos/ }))

@@ -328,12 +328,12 @@ export class D1Repository {
     return Number(row?.n ?? 0);
   }
 
-  async beginDiscard({ encargoId, accountId, version, now }) {
+  async beginDiscard({ encargoId, accountId, version, note, now }) {
     const rows = await this.listAssets(encargoId, { role: 'deliverable', versions: [version, version - 1] });
-    const updated = await this.db.prepare(`UPDATE encargos SET status = 'queued', content_hash = NULL, publish_at = NULL, updated_at = ? WHERE encargo_id = ? AND status IN ('ready', 'approved', 'scheduled')`).bind(now, encargoId).run();
+    const updated = await this.db.prepare(`UPDATE encargos SET status = 'queued', note = COALESCE(?, note), content_hash = NULL, publish_at = NULL, updated_at = ? WHERE encargo_id = ? AND status IN ('ready', 'approved', 'scheduled')`).bind(note ?? null, now, encargoId).run();
     if (updated.meta.changes !== 1) return { changed: false, rows: [] };
     const stmts = [
-      this.db.prepare('INSERT INTO encargo_events (account_id, encargo_id, at, kind, detail_json) VALUES (?, ?, ?, ?, ?)').bind(accountId, encargoId, now, 'changes', j({ version })),
+      this.db.prepare('INSERT INTO encargo_events (account_id, encargo_id, at, kind, detail_json) VALUES (?, ?, ?, ?, ?)').bind(accountId, encargoId, now, 'changes', j({ version, note })),
     ];
     for (const row of rows) {
       stmts.push(this.db.prepare('UPDATE encargo_assets SET delete_pending = 1 WHERE asset_id = ?').bind(row.asset_id));

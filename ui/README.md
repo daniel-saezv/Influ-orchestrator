@@ -1,6 +1,6 @@
 # UI de encargos
 
-Aplicación mobile-first de la fase B, hecha con Vite, React, Tailwind y shadcn. Consume una API fingida sustituible por el cliente del Worker en la fase G.
+Aplicación mobile-first hecha con Vite, React, Tailwind y shadcn. Consume las rutas `/v1/me/*` del Worker desde el mismo origen y se construye como asset del Worker.
 
 ## Instalar y arrancar
 
@@ -10,7 +10,7 @@ npm ci
 npm run dev
 ```
 
-Vite muestra la URL local. No hay que arrancar Wrangler: `wrangler dev --local` no soporta actualmente el export `SERVICE_VERSION`.
+Vite muestra la URL local. Las llamadas `/v1/*` necesitan el Worker desplegado o Access; para validar el contrato sin backend se siguen usando `tests` y `fakeApi.js`.
 
 ## Validar
 
@@ -20,6 +20,6 @@ npm run test:run
 npm run build
 ```
 
-La API de `src/api/` simula todas las rutas `/v1/me`, conserva el aislamiento entre cuentas y solo guarda en `localStorage` el id de una subida interrumpida. El navegador no contiene HMAC ni secretos. Cualquier cliente real futuro debe usar `credentials: "same-origin"`.
+`src/api/api.js` usa `fetch` con `credentials: "same-origin"`, envía partes de hasta 5 MiB como cuerpos binarios y calcula sus SHA-256 en el teléfono. La implementación fingida queda solo en las pruebas. El navegador no contiene HMAC, cuerpos persistidos, tokens ni secretos; `localStorage` guarda únicamente el id de una subida interrumpida.
 
-La PWA aún no tiene service worker ni está conectada al Worker. El texto de «Añadir a pantalla de inicio» se limita a preparar la experiencia cuando `display-mode` no sea `standalone`.
+El build `dist/` incluye el manifiesto PWA, iconos PNG y un icono para Safari. Se publica junto al Worker mediante `[assets]` en `wrangler.toml`; `/v1/*` sigue ejecutándose en el Worker. No hay service worker.

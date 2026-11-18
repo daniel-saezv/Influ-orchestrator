@@ -134,6 +134,49 @@ test('subida: partes, reintento de la misma huella, lectura en bytes y aislamien
   }
 });
 
+test('una reanudación conserva la sesión original y permite varios orígenes del encargo', async () => {
+  const h = harness();
+  const first = await draft(h);
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  const digest = shaHex(bytes);
+  const opened = await h.read(await h.call('POST', '/v1/me/uploads', first.email, {
+    json: { encargo_id: first.encargoId, size_bytes: bytes.length, mime: 'video/mp4', sha256: digest },
+  }));
+
+  const wrongFile = await h.read(await h.call('POST', '/v1/me/uploads', first.email, {
+    json: {
+      encargo_id: first.encargoId, size_bytes: 5, mime: 'video/mp4',
+      sha256: digest, resume_id: opened.data.upload_id,
+    },
+  }));
+  assert.equal(wrongFile.status, 409);
+
+  const resumed = await h.read(await h.call('POST', '/v1/me/uploads', first.email, {
+    json: {
+      encargo_id: first.encargoId, size_bytes: bytes.length, mime: 'video/mp4',
+      sha256: digest, resume_id: opened.data.upload_id,
+    },
+  }));
+  assert.equal(resumed.data.upload_id, opened.data.upload_id);
+  assert.equal(resumed.data.encargo_id, first.encargoId);
+
+  await h.read(await h.call('PUT', `/v1/me/uploads/${opened.data.upload_id}/parts/1`, first.email, {
+    raw: bytes,
+    headers: { 'x-content-sha256': digest },
+  }));
+  await h.read(await h.call('POST', `/v1/me/uploads/${opened.data.upload_id}/complete`, first.email, {
+    json: { sha256: digest },
+  }));
+
+  const secondBytes = new Uint8Array([5, 6, 7]);
+  const secondDigest = shaHex(secondBytes);
+  const second = await h.read(await h.call('POST', '/v1/me/uploads', first.email, {
+    json: { encargo_id: first.encargoId, size_bytes: secondBytes.length, mime: 'audio/mpeg', sha256: secondDigest },
+  }));
+  assert.equal(second.status, 201);
+  assert.notEqual(second.data.upload_id, opened.data.upload_id);
+});
+
 test('150 MiB + 1 no llama a R2 y una parte de más anuncia dos partes', async () => {
   const h = harness();
   const { email, encargoId } = await draft(h);
