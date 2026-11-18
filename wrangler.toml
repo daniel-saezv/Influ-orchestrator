@@ -5,6 +5,7 @@ name = "influ-poc-orchestrator"
 main = "src/worker.js"
 compatibility_date = "2026-11-01"
 workers_dev = true
+preview_urls = true
 
 [observability]
 enabled = true
@@ -35,3 +36,28 @@ RATE_LIMIT_HEALTH_PER_MINUTE = "120"
 RATE_LIMIT_ANON_PER_MINUTE = "60"
 ACCESS_TEAM_DOMAIN = "ancient-waterfall-b3eb.cloudflareaccess.com"
 ACCESS_AUD = "451e385e4fa58e74bc0f91981e92d9427ae34af5389d58bd62e81b36de3a8a8d"
+
+# Previews de PR (`wrangler preview`). No heredan D1, KV, cron ni secretos de producción.
+# El cron queda solo en el Worker de producción. MEDIA no se enlaza aquí.
+# El id lo resuelve deploy/ensure-preview-d1.mjs en CI; el valor de abajo es un marcador.
+
+[previews.vars]
+PUBLISHER_MODE = "mock"
+PUBLISHER_PROVIDER = "youtube"
+MAX_ATTEMPTS = "3"
+RETRY_BASE_SECONDS = "10"
+MAX_PUBLICATIONS_PER_RUN = "4"
+MAX_STATUS_POLLS = "3"
+DEPLOY_ENV = "poc"
+RATE_LIMIT_ENABLED = "true"
+RATE_LIMIT_HEALTH_PER_MINUTE = "120"
+RATE_LIMIT_ANON_PER_MINUTE = "60"
+ACCESS_TEAM_DOMAIN = "ancient-waterfall-b3eb.cloudflareaccess.com"
+# App Access «influu-poc-orchestrator previews» (cfd654f0-28e2-4bb8-b6f5-6e247837638f). No es el AUD de producción.
+ACCESS_AUD = "65a4c70c4dc51d0a7ba55ff3bd6395e32244c8092a994241d3e5efe880e6cd46"
+
+[[previews.d1_databases]]
+binding = "DB"
+database_name = "influ-poc-db-preview"
+database_id = "00000000-0000-4000-8000-000000000001"
+migrations_dir = "migrations"
