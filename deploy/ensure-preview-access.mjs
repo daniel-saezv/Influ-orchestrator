@@ -177,16 +177,22 @@ async function accessWriteGroupId(accountId, token) {
   return null;
 }
 
+const ACCESS_WRITE_HINT = 'El token CLOUDFLARE_API_TOKEN necesita el permiso Access: Apps and Policies Write. El valor del secreto no cambia al añadirlo.';
+
 async function grantAccessWrite(accountId, token) {
-  const verify = await cf(accountId, token, '/user/tokens/verify');
-  const tokenId = verify.result?.id;
+  let tokenId = null;
+  try {
+    const verify = await cf(accountId, token, '/user/tokens/verify');
+    tokenId = verify.result?.id;
+  } catch (error) {
+    if (error.status === 401 || error.status === 403) throw new Error(ACCESS_WRITE_HINT);
+    throw error;
+  }
   if (!tokenId || !/^[a-f0-9]+$/i.test(tokenId)) {
-    throw new Error('El token no admite ampliar permisos');
+    throw new Error(ACCESS_WRITE_HINT);
   }
   const groupId = await accessWriteGroupId(accountId, token);
-  if (!groupId) {
-    throw new Error('El token CLOUDFLARE_API_TOKEN necesita el permiso Access: Apps and Policies Write');
-  }
+  if (!groupId) throw new Error(ACCESS_WRITE_HINT);
   const candidates = [`/user/tokens/${tokenId}`, `/accounts/${accountId}/tokens/${tokenId}`];
   let current = null;
   let pathUsed = null;
@@ -200,7 +206,7 @@ async function grantAccessWrite(accountId, token) {
     }
   }
   if (!current?.result?.name || !pathUsed) {
-    throw new Error('El token CLOUDFLARE_API_TOKEN necesita el permiso Access: Apps and Policies Write');
+    throw new Error(ACCESS_WRITE_HINT);
   }
   const before = (current.result.policies ?? []).reduce((count, policy) => count + (policy.permission_groups?.length ?? 0), 0);
   const policies = withAccessWritePolicy(current.result.policies, groupId, accountId);
