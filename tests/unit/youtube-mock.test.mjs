@@ -20,7 +20,7 @@ async function fullPublish(a, p) {
   return { stage: 'done', up, pr, st, res: await a.getPublicationResult(pr.provider_post_id) };
 }
 
-test('contrato: mock, live (stub) y placeholders implementan SocialPublisher', () => {
+test('contrato: los mocks y el stub LIVE implementan SocialPublisher', () => {
   const reg = createPublisherRegistry({}, { store: new MemoryStore() });
   for (const p of ['youtube', 'instagram', 'tiktok']) for (const m of SOCIAL_PUBLISHER_METHODS) assert.equal(typeof reg.forPlatform(p)[m], 'function');
   assert.equal(reg.forPlatform('youtube').info.mode, 'mock');
