@@ -48,9 +48,9 @@ Opcional: `INFLU_BASE_URL` si la URL workers.dev no sigue el patrón `https://in
 7. `wrangler deploy`
 8. Smoke: sin token → 302/403; con service token → `/v1/health` 200 y `live_enabled_in_build: false`
 
-El job `deploy` es el único que ejecuta `wrangler d1 migrations apply influ-poc-db` y `wrangler deploy`.
+El job `deploy` es el único que ejecuta `wrangler d1 migrations apply influ-poc-db`, `deploy/ensure-r2-bucket.mjs production` y `wrangler deploy`. El job `ci` no crea el bucket de producción: en una PR no tiene `CLOUDFLARE_API_TOKEN` ni `CLOUDFLARE_ACCOUNT_ID`.
 
-Antes del dry-run (job `ci`) y antes de `wrangler deploy`, `deploy/ensure-r2-bucket.mjs production` crea o reutiliza el bucket `influ-poc-media`. No lo borra y no configura ciclo de vida. Si R2 no está activado en la cuenta, o el token no tiene **Workers R2 Storage → Edit**, ese paso falla. No se salta: el binding de `wrangler.toml` no se despliega hasta que R2 exista.
+En el deploy de `main`, `deploy/ensure-r2-bucket.mjs production` crea o reutiliza `influ-poc-media` antes de `wrangler deploy`. No lo borra y no configura ciclo de vida. Si R2 no está activado en la cuenta, o el token no tiene **Workers R2 Storage → Edit**, ese paso falla. No se salta: el binding de `wrangler.toml` no se despliega hasta que R2 exista.
 
 ## Preview por pull request
 

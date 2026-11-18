@@ -7,6 +7,17 @@ import { assertWranglerR2, PREVIEW_BUCKET, PRODUCTION_BUCKET } from '../../deplo
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+test('el bucket de producción solo se crea en el deploy de main', () => {
+  const workflow = readFileSync(join(ROOT, '.github/workflows/deploy.yml'), 'utf8');
+  const ci = workflow.slice(workflow.indexOf('\n  ci:'), workflow.indexOf('\n  deploy:'));
+  const deploy = workflow.slice(workflow.indexOf('\n  deploy:'), workflow.indexOf('\n  preview:'));
+  const preview = workflow.slice(workflow.indexOf('\n  preview:'));
+  assert.equal(ci.includes('ensure-r2-bucket.mjs'), false);
+  assert.equal(deploy.includes('ensure-r2-bucket.mjs production'), true);
+  assert.equal(preview.includes('ensure-r2-bucket.mjs preview'), true);
+  assert.equal(preview.includes('ensure-r2-bucket.mjs production'), false);
+});
+
 test('la preview no usa el bucket de producción', () => {
   const text = readFileSync(join(ROOT, 'wrangler.toml'), 'utf8');
   assert.doesNotThrow(() => assertWranglerR2(text));

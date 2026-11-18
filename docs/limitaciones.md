@@ -20,7 +20,7 @@
 
 ## Pendiente de tu autorización
 1. **GitHub**: dar acceso de escritura para subir el código a `daniel-saezv/Influ-orchestrator` (el conector solo permite leer; no hay `gh` autenticado).
-2. **R2**: activarlo en el panel de Cloudflare (pide datos de facturación aunque el uso sea gratuito) y dar al token de CI el permiso **Workers R2 Storage → Edit**. Sin eso, el job que crea `influ-poc-media` y el dry-run del binding fallan. El bucket de preview es `influ-poc-media-preview`.
+2. **R2**: activarlo en el panel de Cloudflare (pide datos de facturación aunque el uso sea gratuito) y dar al token de CI el permiso **Workers R2 Storage → Edit**. Sin eso, el deploy de `main` no puede crear `influ-poc-media` y la preview no puede crear `influ-poc-media-preview`. La validación de una PR no crea el bucket de producción.
 3. **n8n**: decidir dónde alojarlo (p. ej. Oracle Cloud Always Free) y crear la instancia.
 4. **YouTube LIVE**: proyecto Google Cloud + OAuth del canal (ver `docs/youtube-live.md`).
 5. **Instagram / TikTok**: apps y OAuth de cada plataforma.

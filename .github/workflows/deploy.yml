@@ -50,12 +50,6 @@ jobs:
       - name: Tests acceptance (local)
         run: npm run test:acceptance -- --target local
 
-      - name: Crear el bucket R2 de producción si no existe
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: node deploy/ensure-r2-bucket.mjs production
-
       - name: wrangler deploy --dry-run
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
