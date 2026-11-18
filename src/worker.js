@@ -17,9 +17,20 @@ import { receiveBatch } from './workflows/wf01-receive-batch.js';
 import { decideBatch } from './workflows/wf02-approve-batch.js';
 import { dispatch, publishBatchNow } from './workflows/wf03-schedule-dispatch.js';
 import { buildReview, buildResults } from './workflows/reports.js';
+import { normalizeEmail } from './core/domain/encargos.js';
+import { claimEncargo, dispatchPerson, listQueued, submitEncargoResult } from './workflows/encargos.js';
 
 export const SERVICE_VERSION = '0.1.0';
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+const PERSON_BODY_MAX = 65_536;
+
+let accessJwtDeps = {};
+/** Solo para pruebas: inyecta las claves de Access sin salir a la red. */
+export function setAccessJwtDeps(deps) { accessJwtDeps = deps ?? {}; }
+
+function isPersonRoute(pathname) {
+  return pathname === '/v1/me' || pathname.startsWith('/v1/me/');
+}
 
 // En MOCK la lista de hosts permitidos está vacía: ninguna salida a Internet.
 installEgressGuard(() => []);
@@ -70,6 +81,9 @@ const ROUTES = [
   ['POST', /^\/v1\/dispatch$/, ['bot'], async (ctx, m, body) => dispatch({ batchId: body?.batch_id, trigger: 'manual-dispatch' }, ctx)],
   ['GET', /^\/v1\/audit$/, ['bot'], async (ctx, m, b, url) => ({ audit: await ctx.repo.listAudit(url.searchParams.get('batch_id')) })],
   ['GET', /^\/v1\/egress$/, ['bot'], async (ctx) => ({ mode: ctx.registry.config.mode, allowed_hosts: [], ...(await ctx.repo.listEgress()) })],
+  ['GET', /^\/v1\/encargos$/, ['bot'], async (ctx, m, body, url) => listQueued(ctx.repo, url.searchParams.get('status'))],
+  ['POST', /^\/v1\/encargos\/([0-9a-f-]{36})\/claim$/, ['bot'], async (ctx, m) => claimEncargo(ctx.repo, { encargoId: m[1], now: ctx.now() })],
+  ['POST', /^\/v1\/encargos\/([0-9a-f-]{36})\/result$/, ['bot'], async (ctx, m, body) => submitEncargoResult(ctx.repo, { encargoId: m[1], body, now: ctx.now() })],
 ];
 
 export default {
@@ -79,13 +93,26 @@ export default {
     try {
       const certHost = teamDomainHostname(env);
       if (certHost) allowEgressHost(certHost);
-      await verifyAccessJwt(request, env);
+      const accessPayload = await verifyAccessJwt(request, env, accessJwtDeps);
 
       if (request.method === 'GET' && url.pathname === '/v1/health') {
         await applyHttpRateLimit(request, env, { scope: 'health' });
         let mode;
         try { mode = createPublisherRegistry(env, {}).config; } catch (e) { mode = { error: e.code ?? 'CONFIG', message: e.message }; }
         return json(200, { ok: true, service: 'influ-poc-orchestrator', version: SERVICE_VERSION, publisher: mode, live_enabled_in_build: LIVE_ENABLED_IN_BUILD, notice: 'POC Fase 1 — publicación SIMULADA' });
+      }
+      if (isPersonRoute(url.pathname)) {
+        const email = normalizeEmail(accessPayload?.email);
+        if (!email) throw err('ACCESS_DENIED', 'Esta ruta es solo para una persona', 403);
+        await applyHttpRateLimit(request, env, { scope: 'user', bucketKey: `user:${email}` });
+        const personBytes = new Uint8Array(await request.arrayBuffer());
+        if (personBytes.length > PERSON_BODY_MAX) throw err('INVALID_INPUT', 'Cuerpo demasiado grande', 400);
+        let personBody = null;
+        if (personBytes.length) {
+          try { personBody = JSON.parse(new TextDecoder().decode(personBytes)); } catch { throw err('INVALID_JSON', 'Cuerpo JSON inválido', 400); }
+        }
+        const data = await dispatchPerson(repo, { method: request.method, pathname: url.pathname, body: personBody, email, now: new Date().toISOString() });
+        return json(200, { ok: true, data });
       }
       if (!isAuthenticatedAttempt(request)) {
         await applyHttpRateLimit(request, env, { scope: 'anon' });

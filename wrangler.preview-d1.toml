@@ -1,0 +1,12 @@
+# Config solo para migrar la D1 de preview.
+# No incluye influ-poc-db y no se usa en `wrangler deploy`.
+# deploy/ensure-preview-d1.mjs sustituye database_id por el uuid real antes de migrar.
+
+name = "influ-poc-orchestrator"
+compatibility_date = "2026-11-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "influ-poc-db-preview"
+database_id = "00000000-0000-4000-8000-000000000001"
+migrations_dir = "migrations"

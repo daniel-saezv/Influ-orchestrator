@@ -17,6 +17,7 @@ export function rateLimitConfig(env = {}) {
   return {
     healthPerMinute: parseLimit(env, 'RATE_LIMIT_HEALTH_PER_MINUTE', 120),
     anonPerMinute: parseLimit(env, 'RATE_LIMIT_ANON_PER_MINUTE', 60),
+    userPerMinute: parseLimit(env, 'RATE_LIMIT_USER_PER_MINUTE', 60),
     enabled: String(env.RATE_LIMIT_ENABLED ?? 'true').toLowerCase() !== 'false',
   };
 }
@@ -42,13 +43,12 @@ export async function purgeOldRateWindows(db, olderThanUnix) {
   await db.prepare('DELETE FROM http_rate_windows WHERE window_id < ?1').bind(olderThanUnix).run();
 }
 
-/** health: bucket health:<ip>; anon: rutas sin cabeceras HMAC completas */
-export async function applyHttpRateLimit(request, env, { scope }) {
+/** health: bucket health:<ip>; anon: rutas sin HMAC; user: bucket user:<email> de las rutas /v1/me. */
+export async function applyHttpRateLimit(request, env, { scope, bucketKey }) {
   const cfg = rateLimitConfig(env);
   if (!cfg.enabled) return null;
-  const ip = clientIp(request);
-  const limit = scope === 'health' ? cfg.healthPerMinute : cfg.anonPerMinute;
-  const bucket = `${scope}:${ip}`;
+  const limit = scope === 'health' ? cfg.healthPerMinute : scope === 'user' ? cfg.userPerMinute : cfg.anonPerMinute;
+  const bucket = bucketKey ?? `${scope}:${clientIp(request)}`;
   const r = await enforceRateLimit(env.DB, bucket, limit);
   return { ...r, bucket };
 }
