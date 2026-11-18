@@ -4,13 +4,13 @@ import { assertSocialPublisher } from '../../core/ports/social-publisher.js';
 import { resolvePublisherConfig } from '../../core/config.js';
 import { YouTubeMockPublisher } from './youtube/youtube-mock.js';
 import { YouTubeLivePublisher } from './youtube/youtube-live.js';
-import { InstagramPlaceholderPublisher } from './instagram/instagram-placeholder.js';
-import { TikTokPlaceholderPublisher } from './tiktok/tiktok-placeholder.js';
+import { InstagramMockPublisher } from './instagram/instagram-mock.js';
+import { TikTokMockPublisher } from './tiktok/tiktok-mock.js';
 
 const FACTORIES = {
   youtube: { mock: (d) => new YouTubeMockPublisher(d), live: () => new YouTubeLivePublisher() },
-  instagram: { mock: () => new InstagramPlaceholderPublisher(), live: null },
-  tiktok: { mock: () => new TikTokPlaceholderPublisher(), live: null },
+  instagram: { mock: (d) => new InstagramMockPublisher(d), live: null },
+  tiktok: { mock: (d) => new TikTokMockPublisher(d), live: null },
 };
 
 export function createPublisherRegistry(env, deps) {
