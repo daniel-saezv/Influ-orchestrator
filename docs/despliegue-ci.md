@@ -51,7 +51,7 @@ El job `deploy` es el único que ejecuta `wrangler d1 migrations apply influ-poc
 
 ## Preview por pull request
 
-El job `preview` corre en `pull_request` cuando la cabeza está en este repositorio (también las PRs de Copilot). Depende de `ci`. No corre en forks.
+El job `preview` corre en `pull_request` cuando la cabeza está en este repositorio (también las PRs de Copilot). Depende de `ci`. No corre en forks. Usa el entorno `production` solo para leer `CLOUDFLARE_API_TOKEN` y `CLOUDFLARE_ACCOUNT_ID` (están en ese entorno, no como secretos sueltos del repositorio). No ejecuta `wrangler deploy` ni migra `influ-poc-db`.
 
 1. `deploy/ensure-preview-d1.mjs` busca la D1 `influ-poc-db-preview`. Si no existe, la crea con `CLOUDFLARE_API_TOKEN` y `CLOUDFLARE_ACCOUNT_ID`. Si el uuid coincide con `influ-poc-db`, el job se detiene.
 2. Escribe ese uuid en `[[previews.d1_databases]]` de `wrangler.toml` y en `wrangler.preview-d1.toml` (solo en el checkout, no hace commit).
