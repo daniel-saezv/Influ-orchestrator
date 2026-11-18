@@ -12,7 +12,9 @@ import {
 } from '../../deploy/ensure-preview-d1.mjs';
 import { previewCommentBody, PREVIEW_COMMENT_MARKER } from '../../deploy/preview-pr-comment.mjs';
 import { previewUrlFromWranglerOutput } from '../../deploy/preview-url.mjs';
-import { patchPreviewAccessAud, PRODUCTION_ACCESS_AUD, withAccessWritePolicy } from '../../deploy/ensure-preview-access.mjs';
+
+const PRODUCTION_ACCESS_AUD = '451e385e4fa58e74bc0f91981e92d9427ae34af5389d58bd62e81b36de3a8a8d';
+const PREVIEW_ACCESS_AUD = '65a4c70c4dc51d0a7ba55ff3bd6395e32244c8092a994241d3e5efe880e6cd46';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const previewId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
@@ -60,30 +62,13 @@ test('el comentario de preview es único y lleva URL y SHA', () => {
 });
 
 test('el AUD de preview no pisa el de producción', () => {
-  const text = `[vars]\nACCESS_AUD = "${PRODUCTION_ACCESS_AUD}"\n\n[previews.vars]\nACCESS_AUD = "${PRODUCTION_ACCESS_AUD}"\n`;
-  const previewAud = 'a'.repeat(64);
-  const next = patchPreviewAccessAud(text, previewAud);
-  assert.match(next, new RegExp(`\\[vars\\]\\nACCESS_AUD = "${PRODUCTION_ACCESS_AUD}"`));
-  assert.match(next, new RegExp(`\\[previews\\.vars\\]\\nACCESS_AUD = "${previewAud}"`));
-  assert.throws(() => patchPreviewAccessAud(text, 'no-es-aud'), /AUD/);
-});
-
-test('ampliar el token conserva los permisos que ya tiene', () => {
-  const accountId = 'f39f0d032bd902adf6dc9b5ed251f4ee';
-  const existing = '11111111111111111111111111111111';
-  const access = '22222222222222222222222222222222';
-  const next = withAccessWritePolicy([
-    {
-      id: 'policy-1',
-      effect: 'allow',
-      resources: { [`com.cloudflare.api.account.${accountId}`]: '*' },
-      permission_groups: [{ id: existing, name: 'Workers Scripts Write' }],
-    },
-  ], access, accountId);
-  assert.equal(next[0].permission_groups[0].id, existing);
-  assert.equal(next[0].id, 'policy-1');
-  assert.equal(next[1].permission_groups[0].id, access);
-  assert.equal(next[1].resources[`com.cloudflare.api.account.${accountId}`], '*');
+  const text = readFileSync(join(root, 'wrangler.toml'), 'utf8');
+  const marker = '[previews.vars]';
+  const at = text.indexOf(marker);
+  assert.ok(at > 0);
+  assert.match(text.slice(0, at), new RegExp(`ACCESS_AUD = "${PRODUCTION_ACCESS_AUD}"`));
+  assert.match(text.slice(at), new RegExp(`ACCESS_AUD = "${PREVIEW_ACCESS_AUD}"`));
+  assert.doesNotMatch(text.slice(at), new RegExp(PRODUCTION_ACCESS_AUD));
 });
 
 test('lee la URL del JSON de wrangler preview aunque haya texto delante', () => {
