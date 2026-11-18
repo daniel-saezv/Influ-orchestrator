@@ -12,7 +12,7 @@ import {
 } from '../../deploy/ensure-preview-d1.mjs';
 import { previewCommentBody, PREVIEW_COMMENT_MARKER } from '../../deploy/preview-pr-comment.mjs';
 import { previewUrlFromWranglerOutput } from '../../deploy/preview-url.mjs';
-import { patchPreviewAccessAud, PRODUCTION_ACCESS_AUD } from '../../deploy/ensure-preview-access.mjs';
+import { patchPreviewAccessAud, PRODUCTION_ACCESS_AUD, withAccessWritePolicy } from '../../deploy/ensure-preview-access.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const previewId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
@@ -66,6 +66,24 @@ test('el AUD de preview no pisa el de producción', () => {
   assert.match(next, new RegExp(`\\[vars\\]\\nACCESS_AUD = "${PRODUCTION_ACCESS_AUD}"`));
   assert.match(next, new RegExp(`\\[previews\\.vars\\]\\nACCESS_AUD = "${previewAud}"`));
   assert.throws(() => patchPreviewAccessAud(text, 'no-es-aud'), /AUD/);
+});
+
+test('ampliar el token conserva los permisos que ya tiene', () => {
+  const accountId = 'f39f0d032bd902adf6dc9b5ed251f4ee';
+  const existing = '11111111111111111111111111111111';
+  const access = '22222222222222222222222222222222';
+  const next = withAccessWritePolicy([
+    {
+      id: 'policy-1',
+      effect: 'allow',
+      resources: { [`com.cloudflare.api.account.${accountId}`]: '*' },
+      permission_groups: [{ id: existing, name: 'Workers Scripts Write' }],
+    },
+  ], access, accountId);
+  assert.equal(next[0].permission_groups[0].id, existing);
+  assert.equal(next[0].id, 'policy-1');
+  assert.equal(next[1].permission_groups[0].id, access);
+  assert.equal(next[1].resources[`com.cloudflare.api.account.${accountId}`], '*');
 });
 
 test('lee la URL del JSON de wrangler preview aunque haya texto delante', () => {

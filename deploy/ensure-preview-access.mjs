@@ -120,6 +120,7 @@ async function createPreviewApp(accountId, token, { worker, policies }) {
     },
   ];
   const failures = [];
+  let last;
   for (const attempt of attempts) {
     try {
       const created = await cf(accountId, token, `/accounts/${accountId}/access/apps`, {
@@ -128,11 +129,87 @@ async function createPreviewApp(accountId, token, { worker, policies }) {
       });
       return created.result;
     } catch (error) {
-      failures.push(error.message);
+      last = error;
+      failures.push(`HTTP ${error.status ?? ''}`.trim());
       if (error.status === 401 || error.status === 403) break;
     }
   }
-  throw new Error(failures.join(' | '));
+  const wrapped = new Error(failures.join(' | ') || 'No se pudo crear la aplicación Access');
+  wrapped.status = last?.status;
+  throw wrapped;
+}
+
+export function withAccessWritePolicy(policies, groupId, accountId) {
+  const next = (policies ?? []).map((policy) => {
+    const item = {
+      effect: policy.effect,
+      resources: policy.resources,
+      permission_groups: (policy.permission_groups ?? []).map((group) => ({ id: group.id })),
+    };
+    if (policy.id) item.id = policy.id;
+    return item;
+  });
+  const present = next.some((policy) => policy.permission_groups.some((group) => group.id === groupId));
+  if (!present) {
+    next.push({
+      effect: 'allow',
+      resources: { [`com.cloudflare.api.account.${accountId}`]: '*' },
+      permission_groups: [{ id: groupId }],
+    });
+  }
+  return next;
+}
+
+async function accessWriteGroupId(accountId, token) {
+  const paths = [
+    '/user/tokens/permission_groups',
+    `/accounts/${accountId}/tokens/permission_groups`,
+  ];
+  for (const path of paths) {
+    try {
+      const body = await cf(accountId, token, path);
+      const match = (body.result ?? []).find((group) => group.name === 'Access: Apps and Policies Write');
+      if (match?.id) return match.id;
+    } catch (error) {
+      if (error.status !== 403 && error.status !== 404) throw error;
+    }
+  }
+  return null;
+}
+
+async function grantAccessWrite(accountId, token) {
+  const verify = await cf(accountId, token, '/user/tokens/verify');
+  const tokenId = verify.result?.id;
+  if (!tokenId || !/^[a-f0-9]+$/i.test(tokenId)) {
+    throw new Error('El token no admite ampliar permisos');
+  }
+  const groupId = await accessWriteGroupId(accountId, token);
+  if (!groupId) {
+    throw new Error('El token CLOUDFLARE_API_TOKEN necesita el permiso Access: Apps and Policies Write');
+  }
+  const candidates = [`/user/tokens/${tokenId}`, `/accounts/${accountId}/tokens/${tokenId}`];
+  let current = null;
+  let pathUsed = null;
+  for (const path of candidates) {
+    try {
+      current = await cf(accountId, token, path);
+      pathUsed = path;
+      break;
+    } catch (error) {
+      if (error.status !== 403 && error.status !== 404) throw error;
+    }
+  }
+  if (!current?.result?.name || !pathUsed) {
+    throw new Error('El token CLOUDFLARE_API_TOKEN necesita el permiso Access: Apps and Policies Write');
+  }
+  const before = (current.result.policies ?? []).reduce((count, policy) => count + (policy.permission_groups?.length ?? 0), 0);
+  const policies = withAccessWritePolicy(current.result.policies, groupId, accountId);
+  const after = policies.reduce((count, policy) => count + policy.permission_groups.length, 0);
+  if (after < before) throw new Error('No se modifican los permisos que el token ya tiene');
+  await cf(accountId, token, pathUsed, {
+    method: 'PUT',
+    body: JSON.stringify({ name: current.result.name, policies }),
+  });
 }
 
 async function syncPreviewPolicies(accountId, token, preview, policies) {
@@ -183,7 +260,15 @@ export async function ensurePreviewAccess(accountId, token) {
   const worker = await workerId(accountId, token);
   const productionId = production?.id;
   let preview = apps.find((app) => app.id !== productionId && coversPreview(app, worker));
-  if (!preview) preview = await createPreviewApp(accountId, token, { worker, policies: policySet });
+  if (!preview) {
+    try {
+      preview = await createPreviewApp(accountId, token, { worker, policies: policySet });
+    } catch (error) {
+      if (error.status !== 403) throw error;
+      await grantAccessWrite(accountId, token);
+      preview = await createPreviewApp(accountId, token, { worker, policies: policySet });
+    }
+  }
   if (!preview?.id || preview.id === productionId) {
     throw new Error('La preview no puede reutilizar la app de producción');
   }
