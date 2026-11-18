@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fakeApi, {
   FAKE_ACCESS_EMAIL,
   MAX_FILE_BYTES,
@@ -15,6 +15,7 @@ import fakeApi, {
 } from '../src/api/fake-api.js'
 
 beforeEach(() => resetFakeApi({ onboarded: true }))
+afterEach(() => vi.unstubAllGlobals())
 
 async function firstAccount() {
   return (await fakeApi.getMe()).data.accounts[0]
@@ -176,11 +177,11 @@ describe('fake Phase B API', () => {
 
   it('resumes a session from only its persisted upload id', async () => {
     const values = new Map()
-    globalThis.localStorage = {
+    vi.stubGlobal('localStorage', {
       getItem: (key) => values.get(key) ?? null,
       setItem: (key, value) => values.set(key, value),
       removeItem: (key) => values.delete(key),
-    }
+    })
     const upload = await fakeApi.createUpload({ size: PART_SIZE_BYTES + 1, storageKey: 'clip-1' })
     expect(getInterruptedUploadId('clip-1')).toBe(upload.data.id)
     await fakeApi.uploadPart(upload.data.id, 1, { size: PART_SIZE_BYTES })

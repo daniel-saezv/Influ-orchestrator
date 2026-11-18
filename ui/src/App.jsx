@@ -521,7 +521,7 @@ function ActivityLoader({ account, activity, setActivity, setError }) {
   if (!activity.length) return <p className="empty-state"><History aria-hidden="true" />Todavía no hay simulaciones.</p>
   return (
     <ul className="activity-list">
-      {activity.map((item) => <li key={item.id}><div><strong>{item.platform}</strong><span>{new Date(item.created_at).toLocaleString()}</span></div><code>{item.id}</code></li>)}
+      {activity.map((item) => <li key={item.id}><div><strong>{item.platform}</strong><span>{new Date(item.published_at ?? item.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span></div><code>{item.mock_id}</code></li>)}
     </ul>
   )
 }

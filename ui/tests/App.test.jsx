@@ -1,23 +1,19 @@
-import { act, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import App from '../src/App.jsx'
-import { resetFakeApi } from '../src/api/fakeApi.js'
+import { configureFakeApi, getFakeApiState, resetFakeApi } from '../src/api/fakeApi.js'
 
 describe('mobile creation flow', () => {
   beforeEach(() => {
     resetFakeApi()
+    configureFakeApi({ transitionReads: 0.5 })
     localStorage.clear()
-    vi.useFakeTimers()
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
   })
 
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
   it('guides a first-time user from the idea to three MOCK platforms and activity', async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const user = userEvent.setup()
     render(<App />)
 
     await user.click(screen.getByRole('button', { name: 'Entrar' }))
@@ -35,8 +31,6 @@ describe('mobile creation flow', () => {
     await user.click(screen.getByRole('button', { name: 'TikTok' }))
     await user.click(screen.getByRole('button', { name: 'Seguir' }))
 
-    expect(await screen.findByRole('heading', { name: 'Lo estoy preparando.' })).toBeInTheDocument()
-    await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
     expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
     expect(screen.getByText('Hecho con ayuda de IA')).toBeInTheDocument()
 
@@ -51,7 +45,7 @@ describe('mobile creation flow', () => {
 
   it('does not show an AI notice for a plain crop', async () => {
     resetFakeApi({ onboarded: true })
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const user = userEvent.setup()
     render(<App />)
     await user.click(screen.getByRole('button', { name: 'Entrar' }))
     await user.click(await screen.findByRole('button', { name: /Alex Studio/ }))
@@ -63,8 +57,8 @@ describe('mobile creation flow', () => {
     await user.type(screen.getByLabelText('Indicaciones'), 'Solo recorta el final')
     await user.click(screen.getByRole('button', { name: 'Prepararlo' }))
     await user.click(screen.getByRole('button', { name: 'Seguir' }))
-    await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
     expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
+    expect(getFakeApiState().encargos[0].synthetic).toBe(false)
     expect(screen.queryByText('Hecho con ayuda de IA')).not.toBeInTheDocument()
   })
 })
