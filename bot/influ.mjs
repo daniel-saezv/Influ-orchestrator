@@ -13,19 +13,20 @@
 //   node bot/influ.mjs dispatch [LOTE-0001]                       (ejecuta WF-03 a demanda)
 //   node bot/influ.mjs results LOTE-0001                          (informe de resultados)
 //   node bot/influ.mjs list | audit [LOTE-0001] | egress
+//   node bot/influ.mjs poll | queue                                   (una vuelta de la cola)
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { OrchestratorClient, materializeBatch } from './client-lib.mjs';
+import { OrchestratorClient, materializeBatch, pollEncargoOnce } from './client-lib.mjs';
 
+const [cmd, a1, a2] = process.argv.slice(2);
 const cfg = loadInfluConfig();
-if (!cfg.base_url || !cfg.bot_secret || !cfg.approver_secret) {
+if (!cfg.base_url || !cfg.bot_secret || (cmd === 'decide' && !cfg.approver_secret)) {
   console.error('Define INFLU_BASE_URL, INFLU_BOT_HMAC_SECRET e INFLU_APPROVER_HMAC_SECRET (o ~/.config/influ-poc/secrets.json).');
   process.exit(2);
 }
 const c = new OrchestratorClient({ baseUrl: cfg.base_url, botSecret: cfg.bot_secret, approverSecret: cfg.approver_secret });
-const [cmd, a1, a2] = process.argv.slice(2);
 const opt = (n) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : undefined; };
 const show = (r) => { console.log(JSON.stringify(r, null, 2)); process.exitCode = r.ok === false ? 1 : 0; };
 
@@ -66,6 +67,21 @@ switch (cmd) {
   case 'list': show(await c.call('GET', '/v1/batches')); break;
   case 'audit': show(await c.audit(a1)); break;
   case 'egress': show(await c.egress()); break;
+  case 'poll':
+  case 'queue': {
+    const generatorCommand = process.env.INFLU_GROK_GENERATE_COMMAND;
+    const generate = generatorCommand ? (encargo, integrity) => {
+      const stdout = execFileSync(generatorCommand, [], {
+        input: JSON.stringify({ encargo, integrity: { sha256: integrity.sha256, sizeBytes: integrity.sizeBytes } }),
+        encoding: 'utf8',
+      });
+      const result = JSON.parse(stdout);
+      if (!result || typeof result !== 'object') throw new Error('GENERADOR_RESPUESTA_INVALIDA');
+      return result;
+    } : undefined;
+    show(await pollEncargoOnce(c, { generate }));
+    break;
+  }
   default: console.log(readFileSync(new URL(import.meta.url)).toString().split('\n').filter((l) => l.startsWith('//')).join('\n'));
 }
 
