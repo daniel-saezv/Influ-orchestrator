@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -102,3 +103,70 @@ jobs:
           INFLU_CF_ACCESS_CLIENT_ID: ${{ secrets.INFLU_CF_ACCESS_CLIENT_ID }}
           INFLU_CF_ACCESS_CLIENT_SECRET: ${{ secrets.INFLU_CF_ACCESS_CLIENT_SECRET }}
         run: node deploy/smoke-health.mjs
+
+  preview:
+    name: Preview de la PR
+    needs: ci
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del SHA de cabeza
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Crear la D1 de preview y aplicar las migraciones de la rama
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          node deploy/ensure-preview-d1.mjs
+          if grep -E '^database_name = "influ-poc-db"$' wrangler.preview-d1.toml; then
+            echo "::error::la config de migraciones incluye la D1 de producción"
+            exit 1
+          fi
+          npx wrangler d1 migrations apply influ-poc-db-preview --remote --config wrangler.preview-d1.toml
+
+      - name: Subir la preview
+        id: preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          npx wrangler preview --name "pr-${PR_NUMBER}" --message "PR ${PR_NUMBER} ${HEAD_SHA}" --json > /tmp/wrangler-preview.json
+          node deploy/preview-url.mjs /tmp/wrangler-preview.json >> "$GITHUB_OUTPUT"
+
+      - name: Comentar la URL y el SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node deploy/preview-pr-comment.mjs
+
+      - name: Comprobar que la preview responde
+        env:
+          PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/preview-health.txt -w '%{http_code}' --max-time 30 "${PREVIEW_URL}/v1/health")
+          echo "HTTP ${code}"
+          head -c 500 /tmp/preview-health.txt || true
+          echo
+          case "$code" in
+            200|301|302|401|403) ;;
+            *) echo "::error::la preview no respondió (HTTP ${code})"; exit 1 ;;
+          esac

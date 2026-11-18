@@ -57,13 +57,13 @@ El proyecto **sí se despliega**. En cada push a `main` (y con `workflow_dispatc
 
 | Workflow | Cuándo | Qué hace |
 |---|---|---|
-| `.github/workflows/deploy.yml` | `pull_request`, push a `main`, `workflow_dispatch` | Job `ci` («Validar y empaquetar»): `npm ci`, gitleaks, `deploy:guard`, `test:unit`, aceptación local, `wrangler deploy --dry-run`. Job `deploy` («Desplegar a producción»): solo si no es un PR y la ref es `main` o el disparo es manual. Sincroniza D1, aplica migraciones, `wrangler deploy` y smoke de `/v1/health`. |
+| `.github/workflows/deploy.yml` | `pull_request`, push a `main`, `workflow_dispatch` | Job `ci` («Validar y empaquetar»): `npm ci`, gitleaks, `deploy:guard`, `test:unit`, aceptación local, `wrangler deploy --dry-run`. Job `deploy` («Desplegar a producción»): solo si no es un PR y la ref es `main` o el disparo es manual. Sincroniza D1 de producción, aplica migraciones a `influ-poc-db`, `wrangler deploy` y smoke de `/v1/health`. Job `preview` («Preview de la PR»): solo PRs del mismo repositorio. Crea o reutiliza `influ-poc-db-preview`, aplica ahí las migraciones de la rama y sube `wrangler preview`. No toca `influ-poc-db`. |
 | `.github/workflows/secrets-guard.yml` | `pull_request` y push a `main` | Job «Archivos sensibles no versionados» y job «gitleaks (historial)». |
 | `.github/workflows/copilot-setup-steps.yml` | Cambios de ese archivo, y `workflow_dispatch` | Prepara el entorno del coding agent cuando la sesión corre en GitHub Actions. No despliega. |
 
 Esos jobs de `deploy` y `secrets-guard` son los que corren en cada pull request. No pude leer la protección de rama de `main` (la API respondió 403), así que no consta aquí si GitHub los marca como obligatorios. Conviene exigirlos en la protección de `main` si aún no lo están. No hace falta otro workflow de test: el job `ci` ya ejecuta los comandos de arriba.
 
-No añado un preview por PR. No es un sitio estático (Vercel o Cloudflare Pages no encajan). `wrangler.toml` apunta al D1 y al KV de la POC; un `wrangler deploy` desde el PR escribiría en esos recursos. Un preview aislado necesitaría otro D1, otro KV y otro entorno de Wrangler. El control del PR es el dry-run.
+Las PRs del mismo repositorio publican una preview con `wrangler preview` y la D1 `influ-poc-db-preview`. No uses `wrangler deploy` en un PR: escribiría en `influ-poc-db` y en el KV de producción. Cómo se crea y se resetea esa D1, y cómo se cargan los secretos HMAC de la preview: [docs/despliegue-ci.md](docs/despliegue-ci.md).
 
 Dependabot (`.github/dependabot.yml`): `github-actions` semanal y agrupado, y `npm` semanal y agrupado (`package.json` + `package-lock.json`). La etiqueta existente `dependencies` se mantiene.
 
