@@ -38,7 +38,7 @@ flowchart LR
 ## Decisiones
 
 - **Workers + D1 en lugar de n8n Cloud + Data Tables**: n8n Cloud no está autorizado. Los workflows WF-01..04 se implementan como código en el Worker; las plantillas n8n (`n8n/workflows`) llaman a la misma API, así que n8n puede ponerse delante más tarde sin tocar núcleo, lotes ni aprobación.
-- **KV + índice D1 en lugar de R2**: R2 exige activarse en el panel de Cloudflare (la API respondió «Please enable R2 through the Cloudflare Dashboard»). KV es eventualmente consistente, por eso la existencia de archivos se consulta en D1. Cambiar a R2 = nuevo adaptador `R2MediaStorage` con el mismo contrato.
+- **KV para el lote del bot y R2 para el vídeo de la persona**: `PUT /v1/media` sigue en KV, con índice en D1, porque KV es eventualmente consistente. La subida de la UI va a R2 Standard (`MEDIA_R2`, adaptador `R2ObjectStore`). El binding no sustituye a KV. R2 hay que activarlo en el panel; hasta entonces el deploy del binding falla.
 - **Un solo Worker** con módulos separados por capa: menos piezas; la separación se mantiene en el código (cada adaptador es un módulo detrás de un puerto).
 - **Simulador con estado en D1** (tabla `mock_provider_records`, separada de las tablas del sistema) para consultar estados y detectar duplicados con consistencia fuerte.
 - **Seguridad desde el diseño**: HMAC-SHA256 + marca de tiempo + nonce anti-replay; claves distintas para bot y aprobador; secretos como Secrets de Workers; guardia de salida que bloquea cualquier `fetch()` en modo MOCK; LIVE deshabilitado en la build.

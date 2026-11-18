@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { D1Repository } from '../../src/adapters/repository/d1-repository.js';
@@ -8,6 +9,7 @@ import {
   claimEncargo, createEncargo, decideEncargo, getStreak, saveGuide, scheduleEncargo, submitEncargoResult,
 } from '../../src/workflows/encargos.js';
 import { createD1Shim, createKvShim } from '../helpers/d1-shim.mjs';
+import { createR2Shim } from '../helpers/r2-shim.mjs';
 import { createAccessSigner, cryptoKeyFromPublic } from '../helpers/access-token.mjs';
 import { OrchestratorClient } from '../../bot/client-lib.mjs';
 import workerMod, { setAccessJwtDeps } from '../../src/worker.js';
@@ -18,7 +20,8 @@ setAccessJwtDeps({ getCertKeys: async () => new Map([['test-kid', accessKey]]) }
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const HASH = 'ab'.repeat(32);
-const SHA = 'cd'.repeat(32);
+const mediaBytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+const SHA = createHash('sha256').update(mediaBytes).digest('hex');
 const AUD = 'aud-encargos';
 const NOW_1 = '2026-07-15T06:30:00.000Z';
 const NOW_2 = '2026-07-15T08:30:00.000Z';
@@ -100,6 +103,11 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
     synthetic: true, content_hash: HASH, deliverable: { r2_key: 'out/pieza', sha256: SHA, mime: 'video/mp4', size_bytes: 1000 },
   } });
   assert.equal(ready.data.version, 1);
+  const digest = createHash('sha256').update(mediaBytes).digest();
+  await env.MEDIA_R2.put('out/pieza', mediaBytes, {
+    sha256: digest.buffer.slice(digest.byteOffset, digest.byteOffset + digest.byteLength),
+    httpMetadata: { contentType: 'video/mp4' },
+  });
 
   await repo.addEncargoAsset({
     encargoId, userId: (await repo.ensureUser('ana@example.com', NOW_1)).user_id,
@@ -125,9 +133,10 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   assert.equal(missing.status, 404);
   assert.equal(missing.error.code, 'NOT_FOUND');
 
-  const ownMedia = await json(await call('GET', `/v1/me/media/${SHA}`, person('ana@example.com')));
+  const ownMedia = await call('GET', `/v1/me/media/${SHA}`, person('ana@example.com'));
   assert.equal(ownMedia.status, 200);
-  assert.equal(ownMedia.data.sha256, SHA);
+  assert.equal(ownMedia.headers.get('x-content-sha256'), SHA);
+  assert.deepEqual(new Uint8Array(await ownMedia.arrayBuffer()), mediaBytes);
   const ownConn = await json(await call('GET', `/v1/me/accounts/${accountId}/connections`, person('ana@example.com')));
   assert.equal(ownConn.status, 200);
   assert.deepEqual(ownConn.data.connections, []);
@@ -228,6 +237,7 @@ function meEnv(shim, userLimit) {
   return {
     DB: shim,
     MEDIA: createKvShim(),
+    MEDIA_R2: createR2Shim(),
     BOT_HMAC_SECRET: 'local-test-bot-secret-0123456789abcdef',
     APPROVER_HMAC_SECRET: 'local-test-approver-secret-0123456789ab',
     PUBLISHER_MODE: 'mock',

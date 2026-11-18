@@ -60,13 +60,13 @@ El proyecto **sí se despliega**. En cada push a `main` (y con `workflow_dispatc
 
 | Workflow | Cuándo | Qué hace |
 |---|---|---|
-| `.github/workflows/deploy.yml` | `pull_request`, push a `main`, `workflow_dispatch` | Job `ci` («Validar y empaquetar»): `npm ci`, gitleaks, `deploy:guard`, `test:unit`, aceptación local, `wrangler deploy --dry-run`. Job `deploy` («Desplegar a producción»): solo si no es un PR y la ref es `main` o el disparo es manual. Sincroniza D1 de producción, aplica migraciones a `influ-poc-db`, `wrangler deploy` y smoke de `/v1/health`. Job `preview` («Preview de la PR»): solo PRs del mismo repositorio. Crea o reutiliza `influ-poc-db-preview`, aplica ahí las migraciones de la rama y sube `wrangler preview`. No toca `influ-poc-db`. |
+| `.github/workflows/deploy.yml` | `pull_request`, push a `main`, `workflow_dispatch` | Job `ci` («Validar y empaquetar»): `npm ci`, gitleaks, `deploy:guard`, `test:unit`, aceptación local, `deploy/ensure-r2-bucket.mjs production` y `wrangler deploy --dry-run`. Job `deploy` («Desplegar a producción»): solo si no es un PR y la ref es `main` o el disparo es manual. Sincroniza D1 de producción, aplica migraciones a `influ-poc-db`, asegura el bucket `influ-poc-media`, `wrangler deploy` y smoke de `/v1/health`. Job `preview` («Preview de la PR»): solo PRs del mismo repositorio. Crea o reutiliza `influ-poc-db-preview` y el bucket `influ-poc-media-preview`, aplica ahí las migraciones de la rama y sube `wrangler preview`. No toca `influ-poc-db` ni `influ-poc-media`. |
 | `.github/workflows/secrets-guard.yml` | `pull_request` y push a `main` | Job «Archivos sensibles no versionados» y job «gitleaks (historial)». |
 | `.github/workflows/copilot-setup-steps.yml` | Cambios de ese archivo, y `workflow_dispatch` | Prepara el entorno del coding agent cuando la sesión corre en GitHub Actions. No despliega. |
 
 Esos jobs de `deploy` y `secrets-guard` son los que corren en cada pull request. No pude leer la protección de rama de `main` (la API respondió 403), así que no consta aquí si GitHub los marca como obligatorios. Conviene exigirlos en la protección de `main` si aún no lo están. No hace falta otro workflow de test: el job `ci` ya ejecuta los comandos de arriba.
 
-Las PRs del mismo repositorio publican una preview con `wrangler preview` y la D1 `influ-poc-db-preview`. No uses `wrangler deploy` en un PR: escribiría en `influ-poc-db` y en el KV de producción. Cómo se crea y se resetea esa D1, y cómo se cargan los secretos HMAC de la preview: [docs/despliegue-ci.md](docs/despliegue-ci.md).
+Las PRs del mismo repositorio publican una preview con `wrangler preview`, la D1 `influ-poc-db-preview` y el bucket R2 `influ-poc-media-preview`. El binding `MEDIA_R2` de producción es `influ-poc-media`. El job `ci` crea ese bucket si no existe, antes del dry-run. Si R2 no está activado en la cuenta, o el token no tiene **Workers R2 Storage → Edit**, ese paso queda en rojo y no se evita. No uses `wrangler deploy` en un PR: escribiría en `influ-poc-db`, en el KV y en el bucket de producción. Cómo se crea y se resetea esa D1, y cómo se cargan los secretos HMAC de la preview: [docs/despliegue-ci.md](docs/despliegue-ci.md).
 
 Dependabot (`.github/dependabot.yml`): `github-actions` semanal y agrupado, y `npm` semanal y agrupado (`package.json` + `package-lock.json`). La etiqueta existente `dependencies` se mantiene.
 
@@ -132,7 +132,7 @@ No hay `.github/copilot-instructions.md`. El cloud agent ya carga este `AGENTS.m
 
 La preparación es `npm ci`. No hay Docker, base de datos local ni navegador de pruebas. No hace falta `.cursor/environment.json`: en el cloud agent de esta cuenta Node ya es v22.23.4.
 
-Para validar un cambio: `npm ci`, `npm run test:unit`, `npm run test:acceptance -- --target local`, `npm run deploy:guard` y `npm run deploy:dry-run`. No hace falta ningún secreto para esos comandos.
+Para validar un cambio: `npm ci`, `npm run test:unit`, `npm run test:acceptance -- --target local` y `npm run deploy:guard`. Esos tres no necesitan secretos. `npm run deploy:dry-run` empaqueta en local sin token. En CI el dry-run va después de `deploy/ensure-r2-bucket.mjs` y sí usa `CLOUDFLARE_API_TOKEN` y `CLOUDFLARE_ACCOUNT_ID`; falla hasta que R2 esté activado y el token tenga Workers R2 Storage → Edit.
 
 `npx wrangler dev --local` falla como se indica en Comandos. No lo uses como arranque.
 

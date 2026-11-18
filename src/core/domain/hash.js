@@ -14,7 +14,8 @@ export async function sha256Hex(data) {
 }
 
 // Contenido que cubre la huella: identidad del lote, textos, hashtags, plataformas,
-// configuraciones, fechas y la huella SHA-256 de cada archivo multimedia.
+// configuraciones y la huella SHA-256 de cada archivo. La hora de publicación
+// (scheduled_at) queda fuera: se escribe después de aprobar, sin nueva versión.
 export function hashableContent(batch) {
   return {
     batch_id: batch.batch_id,
@@ -28,7 +29,6 @@ export function hashableContent(batch) {
         content_type: p.content_type,
         media: p.media,
         copy: p.copy,
-        scheduled_at: p.scheduled_at,
         settings: p.settings ?? null,
         test_controls: p.test_controls ?? null,
       })),

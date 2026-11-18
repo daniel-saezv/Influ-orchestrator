@@ -13,13 +13,13 @@ test('canonicalize es estable con independencia del orden de claves', () => {
   assert.equal(canonicalize({ b: 1, a: [2, { d: 1, c: 2 }] }), canonicalize({ a: [2, { c: 2, d: 1 }], b: 1 }));
 });
 
-test('la huella cambia si cambia un copy, un hashtag, una fecha o el archivo', async () => {
+test('la huella cambia con el copy, un hashtag o el archivo, y no con la hora', async () => {
   const h0 = await contentHash(validateBatchInput(batch()));
   assert.match(h0, /^[a-f0-9]{64}$/);
   assert.equal(h0, await contentHash(validateBatchInput(batch())));
   assert.notEqual(h0, await contentHash(validateBatchInput(batch({ publications: [pub({ copy: { title: 't2' } })] }))));
   assert.notEqual(h0, await contentHash(validateBatchInput(batch({ publications: [pub({ copy: { title: 't', hashtags: ['#a'] } })] }))));
-  assert.notEqual(h0, await contentHash(validateBatchInput(batch({ publications: [pub({ scheduled_at: '2026-11-19T18:00:00Z' })] }))));
+  assert.equal(h0, await contentHash(validateBatchInput(batch({ publications: [pub({ scheduled_at: '2026-11-19T18:00:00Z' })] }))));
   assert.notEqual(h0, await contentHash(validateBatchInput(batch({ publications: [pub({ media: { sha256: 'b'.repeat(64), mime: 'video/mp4', size_bytes: 10, filename: 'a.mp4' } })] }))));
 });
 

@@ -8,6 +8,7 @@
 import { ErrorCode, providerError } from '../../../core/ports/social-publisher.js';
 import { PublicationStatus as S } from '../../../core/domain/states.js';
 import { validateYouTubePost, sniffVideo, buildDescription } from './youtube-rules.js';
+import { takeVerifiedUpload, verifiedMediaCap } from '../verified-media.js';
 
 export const MOCK_URL_BASE = 'https://youtube.mock.invalid/watch?v=';
 const NOTICE = 'SIMULACIÓN (MOCK): no se ha publicado nada en YouTube.';
@@ -44,7 +45,7 @@ export class YouTubeMockPublisher {
   }
 
   async validatePost(post) {
-    const r = validateYouTubePost(post, { maxBytes: this.maxBytes });
+    const r = validateYouTubePost(post, { maxBytes: verifiedMediaCap(post, this.maxBytes) });
     this.#log('validatePost', { publication_id: post.publication_id, ok: r.ok });
     return this.#base(r);
   }
@@ -69,13 +70,17 @@ export class YouTubeMockPublisher {
       await this.#save(key, rec);
       return this.#base({ ok: true, upload_id: rec.video_id, duplicate: true });
     }
-    const bytes = media?.bytes;
-    const sniffed = sniffVideo(bytes);
-    if (!sniffed) return this.#base({ ok: false, error: providerError(ErrorCode.VALIDATION_ERROR, 'MOCK: el contenido del archivo no es un vídeo reconocible (firma inválida)', false) });
-    if (bytes.length !== post.media.size_bytes) return this.#base({ ok: false, error: providerError(ErrorCode.VALIDATION_ERROR, `MOCK: tamaño recibido ${bytes.length} != declarado ${post.media.size_bytes}`, false) });
-    if (bytes.length > this.maxBytes) return this.#base({ ok: false, error: providerError(ErrorCode.VALIDATION_ERROR, 'MOCK: archivo demasiado grande', false) });
+    const verified = takeVerifiedUpload(post, media);
+    if (verified?.error) return this.#base({ ok: false, error: verified.error });
+    const bytes = verified ? null : media?.bytes;
+    const sniffed = verified ? verified.mime : sniffVideo(bytes);
+    if (!verified) {
+      if (!sniffed) return this.#base({ ok: false, error: providerError(ErrorCode.VALIDATION_ERROR, 'MOCK: el contenido del archivo no es un vídeo reconocible (firma inválida)', false) });
+      if (bytes.length !== post.media.size_bytes) return this.#base({ ok: false, error: providerError(ErrorCode.VALIDATION_ERROR, `MOCK: tamaño recibido ${bytes.length} != declarado ${post.media.size_bytes}`, false) });
+      if (bytes.length > this.maxBytes) return this.#base({ ok: false, error: providerError(ErrorCode.VALIDATION_ERROR, 'MOCK: archivo demasiado grande', false) });
+    }
     rec.video_id = mockVideoId();
-    rec.upload = { bytes: bytes.length, detected_mime: sniffed, uploaded_at: this.now().toISOString() };
+    rec.upload = { bytes: verified ? verified.size : bytes.length, detected_mime: sniffed, uploaded_at: this.now().toISOString(), ...(verified ? { verified: 'r2-sha256' } : {}) };
     rec.video = {
       id: rec.video_id,
       snippet: { title: post.copy.title, description: buildDescription(post.copy), tags: post.copy.tags ?? [], categoryId: post.copy.category_id },
