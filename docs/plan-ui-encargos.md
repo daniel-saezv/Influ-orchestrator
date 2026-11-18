@@ -385,6 +385,18 @@ La fase F prueba, además del tope y del checksum: `changes` borra la pieza desc
 
 Pruebas de código, cuando existan: `npm run test:unit`, `npm run test:acceptance -- --target local`, `npm run deploy:guard`. Este PR no tiene UI que abrir.
 
+## Pendiente: control de costes de R2
+
+Tarea abierta. No forma parte de lo que se está construyendo ahora.
+
+Cloudflare no ofrece hoy límites de gasto que bloqueen R2. Los límites que cortan el servicio al llegar a un importe solo existen para Workers y Durable Objects. Para R2 solo hay alertas de presupuesto por email, y no bloquean ni el uso ni el cargo.
+
+El tope tiene que estar en la aplicación: una cuota total de almacenamiento, y si hace falta también de operaciones, por debajo de la cuota gratuita de R2. Una subida que la supere se rechaza y no llama a R2. Esa cuota se suma al límite de 150 MiB por archivo y a la limpieza de huérfanos que hace el cron.
+
+El usuario configura una alerta de presupuesto en Cloudflare: Billing → Billable Usage → Set Budget Alert.
+
+En cuanto Cloudflare permita límites de gasto nativos para R2, hay que revisar si cubren este caso.
+
 ## Riesgos
 
 1. **R2 factura si alguien se salta el tope.** El redondeo convierte un GB o una operación de más en la unidad siguiente. La reserva en D1 es la barrera; el ciclo de vida solo recoge huérfanos y puede tardar unas 24 h. El alta lleva método de pago: lo pone el usuario, y un fallo del contador sí podría generar importe. Por eso el tope global es 6 GB y 800.000 operaciones de clase A, no el cupo oficial entero.

@@ -16,6 +16,7 @@ Crea un **API Token** (My Profile → API Tokens → Create Custom Token) con pe
 | Account | **Workers Scripts → Edit** |
 | Account | **Workers KV Storage → Edit** |
 | Account | **D1 → Edit** |
+| Account | **Workers R2 Storage → Edit** |
 
 Opcional si gestionas workers.dev manualmente: **Workers Subdomain → Read** (el smoke resuelve la URL vía API con el token anterior).
 
@@ -47,7 +48,9 @@ Opcional: `INFLU_BASE_URL` si la URL workers.dev no sigue el patrón `https://in
 7. `wrangler deploy`
 8. Smoke: sin token → 302/403; con service token → `/v1/health` 200 y `live_enabled_in_build: false`
 
-El job `deploy` es el único que ejecuta `wrangler d1 migrations apply influ-poc-db` y `wrangler deploy`.
+El job `deploy` es el único que ejecuta `wrangler d1 migrations apply influ-poc-db`, `deploy/ensure-r2-bucket.mjs production` y `wrangler deploy`. El job `ci` no crea el bucket de producción: en una PR no tiene `CLOUDFLARE_API_TOKEN` ni `CLOUDFLARE_ACCOUNT_ID`.
+
+En el deploy de `main`, `deploy/ensure-r2-bucket.mjs production` crea o reutiliza `influ-poc-media` antes de `wrangler deploy`. No lo borra y no configura ciclo de vida. Si R2 no está activado en la cuenta, o el token no tiene **Workers R2 Storage → Edit**, ese paso falla. No se salta: el binding de `wrangler.toml` no se despliega hasta que R2 exista.
 
 ## Preview por pull request
 
@@ -56,10 +59,11 @@ El job `preview` corre en `pull_request` cuando la cabeza está en este reposito
 1. `deploy/ensure-preview-d1.mjs` busca la D1 `influ-poc-db-preview`. Si no existe, la crea con `CLOUDFLARE_API_TOKEN` y `CLOUDFLARE_ACCOUNT_ID`. Si el uuid coincide con `influ-poc-db`, el job se detiene.
 2. Escribe ese uuid en `[[previews.d1_databases]]` de `wrangler.toml` y en `wrangler.preview-d1.toml` (solo en el checkout, no hace commit).
 3. `npx wrangler d1 migrations apply influ-poc-db-preview --remote --config wrangler.preview-d1.toml` aplica las migraciones **de la rama** a esa base. `wrangler.preview-d1.toml` no declara `influ-poc-db`.
-4. `npx wrangler preview --name pr-<número> --json` sube la preview. La URL sale en un solo comentario (`<!-- influ-preview -->`) junto al SHA de cabeza. Cada push actualiza ese comentario.
-5. Sin cookie, `GET /health` y `GET /v1/health` deben responder 302 hacia `*.cloudflareaccess.com`. El job no publica la preview si la petición llega al Worker.
+4. `deploy/ensure-r2-bucket.mjs preview` crea o reutiliza `influ-poc-media-preview`. Nunca escribe en `influ-poc-media`.
+5. `npx wrangler preview --name pr-<número> --json` sube la preview. La URL sale en un solo comentario (`<!-- influ-preview -->`) junto al SHA de cabeza. Cada push actualiza ese comentario.
+6. Sin cookie, `GET /health` y `GET /v1/health` deben responder 302 hacia `*.cloudflareaccess.com`. El job no publica la preview si la petición llega al Worker.
 
-`workers_dev` y `preview_urls` están activos. El bloque `[previews]` copia las vars de producción (modo mock y el dominio de Access) y el binding `DB` de `influ-poc-db-preview`. `ACCESS_AUD` de preview es el de la aplicación Access `influu-poc-orchestrator previews` (`cfd654f0-28e2-4bb8-b6f5-6e247837638f`), distinta de la de producción. Esa aplicación se gestiona fuera de la CI: cubre `*-influ-poc-orchestrator.gamu-development.workers.dev` y las previews de este Worker, con las mismas políticas reutilizables que producción. El token de CI no la crea ni la modifica, y no necesita permisos de Access. El Worker sigue exigiendo `Cf-Access-Jwt-Assertion`. El issuer sigue siendo `ACCESS_TEAM_DOMAIN`. No copia el cron ni el KV `MEDIA`: la preview no dispara el despacho de producción y no escribe en el namespace de media. `/v1/health` no usa KV.
+`workers_dev` y `preview_urls` están activos. El bloque `[previews]` copia las vars de producción (modo mock y el dominio de Access), el binding `DB` de `influ-poc-db-preview` y `MEDIA_R2` de `influ-poc-media-preview`. `ACCESS_AUD` de preview es el de la aplicación Access `influu-poc-orchestrator previews` (`cfd654f0-28e2-4bb8-b6f5-6e247837638f`), distinta de la de producción. Esa aplicación se gestiona fuera de la CI: cubre `*-influ-poc-orchestrator.gamu-development.workers.dev` y las previews de este Worker, con las mismas políticas reutilizables que producción. El token de CI no la crea ni la modifica, y no necesita permisos de Access. El Worker sigue exigiendo `Cf-Access-Jwt-Assertion`. El issuer sigue siendo `ACCESS_TEAM_DOMAIN`. No copia el cron ni el KV `MEDIA`: la preview no dispara el despacho de producción y no escribe en el namespace de media del bot. `/v1/health` no usa KV.
 
 Todas las previews comparten `influ-poc-db-preview`. `migrations apply` solo avanza. Dos PRs con migraciones distintas pueden dejar el esquema en el punto de la que corrió última.
 

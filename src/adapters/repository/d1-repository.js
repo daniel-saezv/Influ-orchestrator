@@ -1,6 +1,7 @@
 // Adaptador BatchRepository sobre Cloudflare D1 (sustituto POC de n8n Data Tables).
 // Las operaciones compuestas usan db.batch() => se ejecutan como una transacción.
 import { publicationId } from '../../core/domain/batch.js';
+import { shiftUtcDay } from '../../core/domain/r2-quota.js';
 import { PublicationStatus as PS } from '../../core/domain/states.js';
 
 const j = (v) => JSON.stringify(v ?? null);
@@ -311,7 +312,7 @@ export class D1Repository {
   }
 
   async mediaForEmail(email, sha256) {
-    return this.db.prepare(`SELECT s.sha256, s.mime, s.size_bytes, s.role, s.encargo_id
+    return this.db.prepare(`SELECT s.sha256, s.mime, s.size_bytes, s.role, s.encargo_id, s.r2_key, s.delete_pending
       FROM encargo_assets s
       JOIN encargos e ON e.encargo_id = s.encargo_id
       JOIN accounts a ON a.account_id = e.account_id
@@ -327,30 +328,32 @@ export class D1Repository {
     return Number(row?.n ?? 0);
   }
 
-  async discardDeliverables({ encargoId, accountId, userId, version, now }) {
-    const bytes = await this.sumAssets(encargoId, { role: 'deliverable', versions: [version, version - 1] });
+  async beginDiscard({ encargoId, accountId, version, now }) {
+    const rows = await this.listAssets(encargoId, { role: 'deliverable', versions: [version, version - 1] });
     const updated = await this.db.prepare(`UPDATE encargos SET status = 'queued', content_hash = NULL, publish_at = NULL, updated_at = ? WHERE encargo_id = ? AND status IN ('ready', 'approved', 'scheduled')`).bind(now, encargoId).run();
-    if (updated.meta.changes !== 1) return { changed: false, bytes: 0 };
+    if (updated.meta.changes !== 1) return { changed: false, rows: [] };
     const stmts = [
-      this.db.prepare(`DELETE FROM encargo_assets WHERE encargo_id = ? AND role = 'deliverable' AND version IN (?, ?)`).bind(encargoId, version, version - 1),
       this.db.prepare('INSERT INTO encargo_events (account_id, encargo_id, at, kind, detail_json) VALUES (?, ?, ?, ?, ?)').bind(accountId, encargoId, now, 'changes', j({ version })),
     ];
-    if (bytes) stmts.push(...byteRelease(this.db, userId, bytes));
+    for (const row of rows) {
+      stmts.push(this.db.prepare('UPDATE encargo_assets SET delete_pending = 1 WHERE asset_id = ?').bind(row.asset_id));
+    }
     await this.db.batch(stmts);
-    return { changed: true, bytes };
+    return { changed: true, rows };
   }
 
-  async cancelEncargoAssets({ encargoId, accountId, userId, now }) {
-    const bytes = await this.sumAssets(encargoId);
+  async beginCancel({ encargoId, accountId, now }) {
+    const rows = await this.listAssets(encargoId);
     const updated = await this.db.prepare(`UPDATE encargos SET status = 'cancelled', publish_at = NULL, updated_at = ? WHERE encargo_id = ? AND status != 'cancelled'`).bind(now, encargoId).run();
-    if (updated.meta.changes !== 1) return { changed: false, bytes: 0 };
+    if (updated.meta.changes !== 1) return { changed: false, rows: [] };
     const stmts = [
-      this.db.prepare('DELETE FROM encargo_assets WHERE encargo_id = ?').bind(encargoId),
       this.db.prepare('INSERT INTO encargo_events (account_id, encargo_id, at, kind, detail_json) VALUES (?, ?, ?, ?, NULL)').bind(accountId, encargoId, now, 'cancelled'),
     ];
-    if (bytes) stmts.push(...byteRelease(this.db, userId, bytes));
+    for (const row of rows) {
+      stmts.push(this.db.prepare('UPDATE encargo_assets SET delete_pending = 1 WHERE asset_id = ?').bind(row.asset_id));
+    }
     await this.db.batch(stmts);
-    return { changed: true, bytes };
+    return { changed: true, rows };
   }
 
   async markApproved(encargoId, accountId, version, contentHash, now) {
@@ -410,6 +413,288 @@ export class D1Repository {
   async recordEncargoEvent(accountId, encargoId, now, kind, detail) {
     await this.db.prepare('INSERT INTO encargo_events (account_id, encargo_id, at, kind, detail_json) VALUES (?, ?, ?, ?, ?)')
       .bind(accountId, encargoId, now, kind, j(detail)).run();
+  }
+
+  async userByEmail(email) {
+    return this.db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  }
+
+  async countAssets(encargoId, role) {
+    const row = role
+      ? await this.db.prepare('SELECT COUNT(*) AS n FROM encargo_assets WHERE encargo_id = ? AND role = ?').bind(encargoId, role).first()
+      : await this.db.prepare('SELECT COUNT(*) AS n FROM encargo_assets WHERE encargo_id = ?').bind(encargoId).first();
+    return Number(row?.n ?? 0);
+  }
+
+  async listAssets(encargoId, { role, versions } = {}) {
+    const r = role && versions
+      ? await this.db.prepare(`SELECT * FROM encargo_assets WHERE encargo_id = ? AND role = ? AND version IN (?, ?)`).bind(encargoId, role, versions[0], versions[1]).all()
+      : await this.db.prepare('SELECT * FROM encargo_assets WHERE encargo_id = ?').bind(encargoId).all();
+    return r.results;
+  }
+
+  async encargoByBatch(batchId) {
+    const row = await this.db.prepare(`SELECT e.*, a.user_id, a.name AS account_name
+      FROM encargos e JOIN accounts a ON a.account_id = e.account_id
+      WHERE e.batch_id = ? LIMIT 1`).bind(batchId).first();
+    return row ? parseEncargo(row) : null;
+  }
+
+  async assetBySha(sha256) {
+    return this.db.prepare(`SELECT s.asset_id, s.encargo_id, s.role, s.r2_key, s.sha256, s.mime, s.size_bytes, s.version, s.delete_pending, a.user_id
+      FROM encargo_assets s
+      JOIN encargos e ON e.encargo_id = s.encargo_id
+      JOIN accounts a ON a.account_id = e.account_id
+      WHERE s.sha256 = ? AND s.delete_pending = 0
+      LIMIT 1`).bind(sha256).first();
+  }
+
+  async holdPublicationsUntilSchedule(batchId, version, now) {
+    const pubs = await this.listPublications(batchId, version);
+    const stmts = [];
+    for (const p of pubs) {
+      if (!['READY', 'SCHEDULED'].includes(p.status)) continue;
+      stmts.push(this.db.prepare(`UPDATE publications SET status = 'VALIDATED', updated_at = ? WHERE publication_id = ? AND status = ?`).bind(now, p.publication_id, p.status));
+      stmts.push(this.db.prepare('INSERT INTO publication_events (publication_id, batch_id, at, op, from_status, to_status, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(p.publication_id, batchId, now, 'HOLD_FOR_SCHEDULE', p.status, 'VALIDATED', null));
+    }
+    if (stmts.length) await this.db.batch(stmts);
+  }
+
+  async schedulePublications({ batchId, version, publishAt, now }) {
+    const pubs = await this.listPublications(batchId, version);
+    const status = Date.parse(publishAt) <= Date.parse(now) ? 'READY' : 'SCHEDULED';
+    const stmts = [];
+    for (const p of pubs) {
+      if (!['VALIDATED', 'READY', 'SCHEDULED'].includes(p.status)) continue;
+      const post = { ...p.post, scheduled_at: publishAt };
+      stmts.push(this.db.prepare(`UPDATE publications SET scheduled_at = ?, status = ?, post_json = ?, updated_at = ? WHERE publication_id = ? AND status = ?`)
+        .bind(publishAt, status, j(post), now, p.publication_id, p.status));
+      stmts.push(this.db.prepare('INSERT INTO publication_events (publication_id, batch_id, at, op, from_status, to_status, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(p.publication_id, batchId, now, 'SCHEDULED_AT', p.status, status, j({ scheduled_at: publishAt })));
+    }
+    if (stmts.length) await this.db.batch(stmts);
+    return stmts.length / 2;
+  }
+
+  async invalidateBatchForChanges({ batchId, now }) {
+    const batch = await this.getBatch(batchId);
+    if (!batch) return;
+    const pubs = await this.listPublications(batchId, batch.version);
+    const stmts = [
+      this.db.prepare(`UPDATE approvals SET valid = 0, invalidated_at = ?, invalidated_reason = ? WHERE batch_id = ? AND valid = 1`)
+        .bind(now, 'Cambios pedidos desde el encargo', batchId),
+    ];
+    if (['APPROVED', 'READY_FOR_REVIEW'].includes(batch.status)) {
+      stmts.push(this.db.prepare(`UPDATE batches SET status = 'CHANGES_REQUESTED', approved_at = NULL, approved_by = NULL, approved_version = NULL, approved_hash = NULL, updated_at = ? WHERE batch_id = ?`)
+        .bind(now, batchId));
+    }
+    for (const p of pubs) {
+      if (!['READY', 'SCHEDULED'].includes(p.status)) continue;
+      stmts.push(this.db.prepare(`UPDATE publications SET status = 'VALIDATED', updated_at = ? WHERE publication_id = ? AND status = ?`).bind(now, p.publication_id, p.status));
+      stmts.push(this.db.prepare('INSERT INTO publication_events (publication_id, batch_id, at, op, from_status, to_status, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(p.publication_id, batchId, now, 'DECISION_REQUEST_CHANGES', p.status, 'VALIDATED', null));
+    }
+    await this.db.batch(stmts);
+  }
+
+  async cancelLinkedBatch({ batchId, now }) {
+    const batch = await this.getBatch(batchId);
+    if (!batch) return;
+    const pubs = await this.listPublications(batchId, batch.version);
+    const stmts = [
+      this.db.prepare(`UPDATE approvals SET valid = 0, invalidated_at = ?, invalidated_reason = ? WHERE batch_id = ? AND valid = 1`)
+        .bind(now, 'Encargo cancelado', batchId),
+    ];
+    if (['DRAFT', 'READY_FOR_REVIEW', 'APPROVED', 'CHANGES_REQUESTED'].includes(batch.status)) {
+      stmts.push(this.db.prepare(`UPDATE batches SET status = 'REJECTED', approved_at = NULL, approved_by = NULL, approved_version = NULL, approved_hash = NULL, updated_at = ? WHERE batch_id = ?`)
+        .bind(now, batchId));
+    }
+    for (const p of pubs) {
+      if (['PUBLISHED', 'CANCELLED'].includes(p.status)) continue;
+      stmts.push(this.db.prepare(`UPDATE publications SET status = 'CANCELLED', updated_at = ? WHERE publication_id = ? AND status = ?`).bind(now, p.publication_id, p.status));
+      stmts.push(this.db.prepare('INSERT INTO publication_events (publication_id, batch_id, at, op, from_status, to_status, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(p.publication_id, batchId, now, 'CANCELLED', p.status, 'CANCELLED', null));
+    }
+    await this.db.batch(stmts);
+  }
+
+  async settleAssetDeletes({ gone, failed, userId, bytes }) {
+    const stmts = [];
+    for (const row of gone) stmts.push(this.db.prepare('DELETE FROM encargo_assets WHERE asset_id = ?').bind(row.asset_id));
+    for (const row of failed) stmts.push(this.db.prepare('UPDATE encargo_assets SET delete_pending = 1 WHERE asset_id = ?').bind(row.asset_id));
+    if (bytes) stmts.push(...byteRelease(this.db, userId, bytes));
+    if (stmts.length) await this.db.batch(stmts);
+  }
+
+  async listPendingDeletes(limit) {
+    const r = await this.db.prepare(`SELECT s.*, a.user_id
+      FROM encargo_assets s
+      JOIN encargos e ON e.encargo_id = s.encargo_id
+      JOIN accounts a ON a.account_id = e.account_id
+      WHERE s.delete_pending = 1
+      ORDER BY s.created_at
+      LIMIT ?`).bind(limit).all();
+    return r.results;
+  }
+
+  async reserveBytes(userId, bytes, userCap, globalCap) {
+    await this.db.batch([
+      this.db.prepare(`INSERT INTO r2_bytes (scope, bytes_stored) VALUES ('global', 0) ON CONFLICT(scope) DO NOTHING`),
+      this.db.prepare(`INSERT INTO r2_bytes (scope, bytes_stored) VALUES (?, 0) ON CONFLICT(scope) DO NOTHING`).bind(userId),
+    ]);
+    const user = await this.db.prepare(`UPDATE r2_bytes SET bytes_stored = bytes_stored + ? WHERE scope = ? AND bytes_stored + ? <= ?`)
+      .bind(bytes, userId, bytes, userCap).run();
+    if (user.meta.changes !== 1) return false;
+    const global = await this.db.prepare(`UPDATE r2_bytes SET bytes_stored = bytes_stored + ? WHERE scope = 'global' AND bytes_stored + ? <= ?`)
+      .bind(bytes, bytes, globalCap).run();
+    if (global.meta.changes !== 1) {
+      await this.db.prepare(`UPDATE r2_bytes SET bytes_stored = bytes_stored - ? WHERE scope = ? AND bytes_stored >= ?`).bind(bytes, userId, bytes).run();
+      return false;
+    }
+    return true;
+  }
+
+  async releaseBytes(userId, bytes) {
+    if (!bytes) return;
+    await this.db.batch(byteRelease(this.db, userId, bytes));
+  }
+
+  async noteBytesPeak(userId, now) {
+    const day = now.slice(0, 10);
+    await this.ensureDaily(userId, day);
+    const globalBytes = await this.storedBytes('global');
+    const userBytes = await this.storedBytes(userId);
+    await this.db.batch([
+      this.db.prepare('UPDATE r2_daily SET bytes_peak = MAX(bytes_peak, ?) WHERE scope = ? AND day = ?').bind(globalBytes, 'global', day),
+      this.db.prepare('UPDATE r2_daily SET bytes_peak = MAX(bytes_peak, ?) WHERE scope = ? AND day = ?').bind(userBytes, userId, day),
+    ]);
+  }
+
+  async classUsed(scope, kind, since) {
+    const sql = kind === 'b'
+      ? 'SELECT COALESCE(SUM(class_b), 0) AS n FROM r2_daily WHERE scope = ? AND day >= ?'
+      : 'SELECT COALESCE(SUM(class_a), 0) AS n FROM r2_daily WHERE scope = ? AND day >= ?';
+    const row = await this.db.prepare(sql).bind(scope, since).first();
+    return Number(row?.n ?? 0);
+  }
+
+  async reserveDaily(userId, kind, now, userCap, globalCap) {
+    const day = now.slice(0, 10);
+    const since = shiftUtcDay(day, -29);
+    await this.ensureDaily(userId, day);
+    if (!await this.bumpDaily(userId, day, since, kind, userCap)) return false;
+    if (!await this.bumpDaily('global', day, since, kind, globalCap)) {
+      await this.unbumpDaily(userId, day, kind);
+      return false;
+    }
+    return true;
+  }
+
+  async releaseDaily(userId, kind, now) {
+    const day = now.slice(0, 10);
+    await this.db.batch([
+      this.unbumpStatement(userId, day, kind),
+      this.unbumpStatement('global', day, kind),
+    ]);
+  }
+
+  async ensureDaily(userId, day) {
+    await this.db.batch([
+      this.db.prepare(`INSERT INTO r2_daily (scope, day, class_a, class_b, bytes_peak) VALUES ('global', ?, 0, 0, 0) ON CONFLICT(scope, day) DO NOTHING`).bind(day),
+      this.db.prepare(`INSERT INTO r2_daily (scope, day, class_a, class_b, bytes_peak) VALUES (?, ?, 0, 0, 0) ON CONFLICT(scope, day) DO NOTHING`).bind(userId, day),
+    ]);
+  }
+
+  bumpDaily(scope, day, since, kind, cap) {
+    const sql = kind === 'b'
+      ? `UPDATE r2_daily SET class_b = class_b + 1 WHERE scope = ? AND day = ? AND (SELECT COALESCE(SUM(class_b), 0) FROM r2_daily WHERE scope = ? AND day >= ?) < ?`
+      : `UPDATE r2_daily SET class_a = class_a + 1 WHERE scope = ? AND day = ? AND (SELECT COALESCE(SUM(class_a), 0) FROM r2_daily WHERE scope = ? AND day >= ?) < ?`;
+    return this.db.prepare(sql).bind(scope, day, scope, since, cap).run().then((res) => res.meta.changes === 1);
+  }
+
+  unbumpStatement(scope, day, kind) {
+    const sql = kind === 'b'
+      ? 'UPDATE r2_daily SET class_b = class_b - 1 WHERE scope = ? AND day = ? AND class_b > 0'
+      : 'UPDATE r2_daily SET class_a = class_a - 1 WHERE scope = ? AND day = ? AND class_a > 0';
+    return this.db.prepare(sql).bind(scope, day);
+  }
+
+  unbumpDaily(scope, day, kind) {
+    return this.unbumpStatement(scope, day, kind).run();
+  }
+
+  async openUploadForEncargo(encargoId) {
+    return this.db.prepare(`SELECT upload_id FROM upload_sessions WHERE encargo_id = ? AND completed_at IS NULL`).bind(encargoId).first();
+  }
+
+  async uploadForUser(userId, uploadId) {
+    return this.db.prepare('SELECT * FROM upload_sessions WHERE upload_id = ? AND user_id = ?').bind(uploadId, userId).first();
+  }
+
+  async insertUploadSession({ uploadId, userId, encargoId, sizeBytes, mime, expectedParts, fileSha, bytesReserved, now }) {
+    await this.db.prepare(`INSERT INTO upload_sessions
+      (upload_id, user_id, encargo_id, expected_parts, received_parts, file_sha256, part_hashes_json, size_bytes, mime, bytes_reserved, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 0, ?, '{}', ?, ?, ?, ?, ?)`).bind(uploadId, userId, encargoId, expectedParts, fileSha, sizeBytes, mime, bytesReserved, now, now).run();
+  }
+
+  async addReserved(uploadId, delta, now) {
+    if (delta >= 0) {
+      await this.db.prepare('UPDATE upload_sessions SET bytes_reserved = bytes_reserved + ?, updated_at = ? WHERE upload_id = ?').bind(delta, now, uploadId).run();
+      return;
+    }
+    const amount = -delta;
+    await this.db.prepare('UPDATE upload_sessions SET bytes_reserved = bytes_reserved - ?, updated_at = ? WHERE upload_id = ? AND bytes_reserved >= ?')
+      .bind(amount, now, uploadId, amount).run();
+  }
+
+  async releasePartHold(uploadId, userId, amount, now) {
+    await this.db.batch([
+      this.db.prepare('UPDATE upload_sessions SET bytes_reserved = bytes_reserved - ?, updated_at = ? WHERE upload_id = ? AND bytes_reserved >= ?')
+        .bind(amount, now, uploadId, amount),
+      ...byteRelease(this.db, userId, amount),
+    ]);
+  }
+
+  async recordPart(uploadId, part, info, now) {
+    const row = await this.db.prepare('SELECT part_hashes_json FROM upload_sessions WHERE upload_id = ?').bind(uploadId).first();
+    const parts = JSON.parse(row?.part_hashes_json || '{}');
+    const key = String(part);
+    if (parts[key]) return parts[key].sha256 === info.sha256 ? 'same' : 'conflict';
+    parts[key] = info;
+    const received = Object.keys(parts).length;
+    const res = await this.db.prepare(`UPDATE upload_sessions SET part_hashes_json = ?, received_parts = ?, updated_at = ? WHERE upload_id = ? AND part_hashes_json = ?`)
+      .bind(JSON.stringify(parts), received, now, uploadId, row.part_hashes_json).run();
+    return res.meta.changes === 1 ? 'saved' : 'retry';
+  }
+
+  async markUploadComplete({ uploadId, fileSha, now }) {
+    const res = await this.db.prepare(`UPDATE upload_sessions
+      SET completed_at = ?, file_sha256 = ?, bytes_reserved = 0, updated_at = ?
+      WHERE upload_id = ? AND completed_at IS NULL AND received_parts = expected_parts`)
+      .bind(now, fileSha, now, uploadId).run();
+    return res.meta.changes === 1;
+  }
+
+  async linkSourceParts({ encargoId, mime, parts, now }) {
+    const stmts = parts.map((part) => this.db.prepare(`INSERT INTO encargo_assets
+      (asset_id, encargo_id, role, r2_key, sha256, mime, size_bytes, version, created_at)
+      VALUES (?, ?, 'source', ?, ?, ?, ?, 1, ?)`).bind(crypto.randomUUID(), encargoId, part.key, part.sha256, mime, part.size, now));
+    stmts.push(this.db.prepare(`UPDATE encargos SET status = 'queued', updated_at = ? WHERE encargo_id = ? AND status = 'draft'`).bind(now, encargoId));
+    await this.db.batch(stmts);
+  }
+
+  async listOrphanUploads(cutoff, limit) {
+    const r = await this.db.prepare(`SELECT * FROM upload_sessions WHERE completed_at IS NULL AND created_at < ? ORDER BY created_at LIMIT ?`).bind(cutoff, limit).all();
+    return r.results;
+  }
+
+  async dropOrphanUpload(session) {
+    const stmts = [
+      this.db.prepare('DELETE FROM upload_sessions WHERE upload_id = ? AND completed_at IS NULL').bind(session.upload_id),
+    ];
+    if (Number(session.bytes_reserved) > 0) stmts.push(...byteRelease(this.db, session.user_id, Number(session.bytes_reserved)));
+    await this.db.batch(stmts);
   }
 }
 

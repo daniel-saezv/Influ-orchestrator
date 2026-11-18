@@ -8,6 +8,7 @@ import { createPublisherRegistry } from './adapters/publishers/registry.js';
 import { D1Repository } from './adapters/repository/d1-repository.js';
 import { D1MockProviderStore } from './adapters/repository/d1-mock-provider-store.js';
 import { KvMediaStorage } from './adapters/storage/kv-media-storage.js';
+import { R2ObjectStore } from './adapters/storage/r2-object-store.js';
 import { verifyRequest } from './adapters/http/auth.js';
 import { applyHttpRateLimit, isAuthenticatedAttempt, purgeOldRateWindows } from './adapters/http/rate-limit.js';
 import { verifyAccessJwt, teamDomainHostname } from './adapters/http/access-jwt.js';
@@ -19,6 +20,8 @@ import { dispatch, publishBatchNow } from './workflows/wf03-schedule-dispatch.js
 import { buildReview, buildResults } from './workflows/reports.js';
 import { normalizeEmail } from './core/domain/encargos.js';
 import { claimEncargo, dispatchPerson, listQueued, submitEncargoResult } from './workflows/encargos.js';
+import { getMediaResponse, putUploadPart } from './workflows/uploads.js';
+import { deleteOrphanUploads, retryPendingDeletes } from './workflows/r2-gc.js';
 
 export const SERVICE_VERSION = '0.1.0';
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
@@ -41,6 +44,7 @@ function buildCtx(env, { actor, keyId }) {
   return {
     repo, settings, actor, keyId,
     media: new KvMediaStorage(env.MEDIA, env.DB),
+    r2: env.MEDIA_R2 ? new R2ObjectStore(env.MEDIA_R2) : null,
     get registry() { // perezoso: si la config de modo es inválida, solo fallan las operaciones que la usan
       if (!this._registry) this._registry = createPublisherRegistry(env, { store: new D1MockProviderStore(env.DB), maxBytes: MAX_MEDIA_BYTES });
       return this._registry;
@@ -105,14 +109,30 @@ export default {
         const email = normalizeEmail(accessPayload?.email);
         if (!email) throw err('ACCESS_DENIED', 'Esta ruta es solo para una persona', 403);
         await applyHttpRateLimit(request, env, { scope: 'user', bucketKey: `user:${email}` });
+        const now = new Date().toISOString();
+        const personCtx = buildCtx(env, { actor: `access:${email}`, keyId: 'access' });
+        const partMatch = /^\/v1\/me\/uploads\/([^/]+)\/parts\/([^/]+)$/.exec(url.pathname);
+        if (partMatch && request.method === 'PUT') {
+          const data = await putUploadPart(personCtx, { email, uploadId: partMatch[1], part: partMatch[2], request, now });
+          return json(200, { ok: true, data });
+        }
+        const mediaMatch = /^\/v1\/me\/media\/([^/]+)$/.exec(url.pathname);
+        if (mediaMatch && request.method === 'GET') {
+          return await getMediaResponse(personCtx, { email, sha256: mediaMatch[1], now });
+        }
         const personBytes = new Uint8Array(await request.arrayBuffer());
         if (personBytes.length > PERSON_BODY_MAX) throw err('INVALID_INPUT', 'Cuerpo demasiado grande', 400);
         let personBody = null;
         if (personBytes.length) {
           try { personBody = JSON.parse(new TextDecoder().decode(personBytes)); } catch { throw err('INVALID_JSON', 'Cuerpo JSON inválido', 400); }
         }
-        const data = await dispatchPerson(repo, { method: request.method, pathname: url.pathname, body: personBody, email, now: new Date().toISOString() });
-        return json(200, { ok: true, data });
+        const data = await dispatchPerson(personCtx.repo, {
+          method: request.method, pathname: url.pathname, body: personBody, email, now, r2: personCtx.r2,
+          dispatchBatch: (batchId) => dispatch({ batchId, trigger: 'schedule-now' }, personCtx),
+        });
+        const status = data?.__http ?? 200;
+        if (data && typeof data === 'object') delete data.__http;
+        return json(status, { ok: true, data });
       }
       if (!isAuthenticatedAttempt(request)) {
         await applyHttpRateLimit(request, env, { scope: 'anon' });
@@ -163,6 +183,8 @@ export default {
     execCtx.waitUntil((async () => {
       try {
         await dispatch({ trigger: `cron:${event.cron}` }, ctx);
+        await retryPendingDeletes(ctx);
+        await deleteOrphanUploads(ctx);
         const nowSec = Math.floor(Date.now() / 1000);
         await purgeOldRateWindows(env.DB, Math.floor(nowSec / 60) - 120);
         await ctx.repo.purgeNonces(new Date(Date.now() - 24 * 3600 * 1000).toISOString());

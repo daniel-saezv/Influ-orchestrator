@@ -5,6 +5,7 @@ import { err } from '../core/domain/errors.js';
 import { contentHash } from '../core/domain/hash.js';
 import { BatchStatus as BS, PublicationStatus as PS, aggregateBatchStatus } from '../core/domain/states.js';
 import { publishOne } from './wf04-publisher.js';
+import { releaseEncargoObjects } from './r2-gc.js';
 
 export async function verifyApproval(b, ctx) {
   const reasons = [];
@@ -65,7 +66,12 @@ export async function dispatch({ batchId, trigger = 'manual' } = {}, ctx) {
     const statuses = after.map((p) => p.status);
     const untouched = statuses.every((s) => [PS.READY, PS.SCHEDULED, PS.CANCELLED].includes(s));
     const newStatus = untouched ? BS.APPROVED : aggregateBatchStatus(statuses);
-    if (newStatus !== b.status) await ctx.repo.updateBatchStatus(id, newStatus, ctx.now());
+    if (newStatus !== b.status) {
+      await ctx.repo.updateBatchStatus(id, newStatus, ctx.now());
+      if ([BS.COMPLETED, BS.FAILED, BS.PARTIALLY_COMPLETED].includes(newStatus)) {
+        await releaseEncargoObjects(ctx, id);
+      }
+    }
     run.batch_status = newStatus;
   }
   await ctx.repo.audit(ctx.actor, 'DISPATCH_RUN', batchId ?? null, { trigger, batches: out.batches.map((x) => ({ id: x.batch_id, processed: x.processed.length, blocked: !!x.blocked })) }, ctx.now());

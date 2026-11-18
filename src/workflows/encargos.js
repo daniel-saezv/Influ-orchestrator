@@ -1,10 +1,13 @@
-// Encargos de la persona (Access) y la cola que lee el bot. Sin UI y sin R2.
+// Encargos de la persona (Access) y la cola que lee el bot. Sin UI.
 import { err } from '../core/domain/errors.js';
 import { BATCH_ID_RE } from '../core/domain/batch.js';
+import { contentHash } from '../core/domain/hash.js';
 import {
   assertAssetBytes, assertName, assertNoControlFields, assertPlatforms, assertSha256, assertTimeZone,
   civilDay, localTime, nextStreakCount, visibleStreak,
 } from '../core/domain/encargos.js';
+import { deleteAssetObjects } from './r2-gc.js';
+import { completeUpload, createUpload } from './uploads.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NOT_FOUND = () => err('NOT_FOUND', 'No encontrado', 404);
@@ -114,47 +117,73 @@ export async function getEncargo(repo, { email, encargoId }) {
   return publicEncargo(await requireOwnedEncargo(repo, email, encargoId));
 }
 
-export async function getMedia(repo, { email, sha256 }) {
-  let hash;
-  try { hash = assertSha256(sha256, 'sha256'); } catch { throw NOT_FOUND(); }
-  const row = await repo.mediaForEmail(email, hash);
-  if (!row) throw NOT_FOUND();
-  return row;
+async function assertBatchHash(repo, batchId) {
+  const batch = await repo.getBatch(batchId);
+  if (!batch) throw err('BATCH_NOT_FOUND', 'No existe el lote enlazado', 404);
+  const recomputed = await contentHash(batch.payload);
+  if (recomputed !== batch.content_hash) {
+    throw err('HASH_MISMATCH', 'La huella almacenada del lote no coincide. Hay que reenviarlo.', 409);
+  }
+  return batch;
 }
 
-export async function decideEncargo(repo, { email, encargoId, body, now }) {
+async function approveLinkedBatch(repo, encargo, now) {
+  const batch = await assertBatchHash(repo, encargo.batch_id);
+  const sameApproval = batch.status === 'APPROVED'
+    && batch.approved_hash === batch.content_hash
+    && Number(batch.approved_version) === Number(batch.version);
+  if (!sameApproval) {
+    if (batch.status !== 'READY_FOR_REVIEW' && batch.status !== 'APPROVED') {
+      throw err('CONFLICT', 'El lote no está listo para aprobar', 409);
+    }
+    const ok = await repo.recordDecision({
+      batchId: batch.batch_id, version: batch.version, hash: batch.content_hash, decision: 'APPROVE',
+      decidedBy: encargo.email, keyId: 'access', commandText: `APROBAR ${batch.batch_id}`, comment: null,
+      now, batchStatus: 'APPROVED', pubUpdates: [],
+    });
+    if (!ok) throw err('CONCURRENT_CHANGE', 'El lote cambió durante la aprobación', 409);
+  }
+  await repo.holdPublicationsUntilSchedule(batch.batch_id, batch.version, now);
+}
+
+export async function decideEncargo(repo, { email, encargoId, body, now, r2 }) {
   assertNoControlFields(body);
   const encargo = await requireOwnedEncargo(repo, email, encargoId);
   const decision = body.decision;
   if (decision !== 'approve' && decision !== 'changes') throw err('INVALID_INPUT', 'decision debe ser approve o changes', 400);
   const version = body.version;
-  const contentHash = assertSha256(body.content_hash, 'content_hash');
-  if (!Number.isInteger(version) || version !== encargo.version || contentHash !== encargo.content_hash) {
+  const reviewedHash = assertSha256(body.content_hash, 'content_hash');
+  if (!Number.isInteger(version) || version !== encargo.version || reviewedHash !== encargo.content_hash) {
     throw err('VERSION_MISMATCH', 'La versión o la huella no coinciden', 409);
   }
   if (decision === 'approve') {
-    const ok = await repo.markApproved(encargo.encargo_id, encargo.account_id, version, contentHash, now);
+    if (encargo.batch_id) await approveLinkedBatch(repo, encargo, now);
+    const ok = await repo.markApproved(encargo.encargo_id, encargo.account_id, version, reviewedHash, now);
     if (!ok) throw err('CONFLICT', 'Este encargo no está listo para aprobar', 409);
     return { encargo_id: encargo.encargo_id, status: 'approved', version };
   }
-  const result = await repo.discardDeliverables({
-    encargoId: encargo.encargo_id, accountId: encargo.account_id, userId: encargo.user_id, version, now,
+  const started = await repo.beginDiscard({
+    encargoId: encargo.encargo_id, accountId: encargo.account_id, version, now,
   });
-  if (!result.changed) throw err('CONFLICT', 'Este encargo no admite cambios', 409);
-  return { encargo_id: encargo.encargo_id, status: 'queued', bytes_released: result.bytes };
+  if (!started.changed) throw err('CONFLICT', 'Este encargo no admite cambios', 409);
+  if (encargo.batch_id) await repo.invalidateBatchForChanges({ batchId: encargo.batch_id, now });
+  const deleted = await deleteAssetObjects(repo, r2, started.rows, encargo.user_id);
+  return { encargo_id: encargo.encargo_id, status: 'queued', bytes_released: deleted.bytes };
 }
 
-export async function cancelEncargo(repo, { email, encargoId, now }) {
+export async function cancelEncargo(repo, { email, encargoId, now, r2 }) {
   const encargo = await requireOwnedEncargo(repo, email, encargoId);
   if (encargo.status === 'cancelled') throw err('CONFLICT', 'El encargo ya está cancelado', 409);
-  const result = await repo.cancelEncargoAssets({
-    encargoId: encargo.encargo_id, accountId: encargo.account_id, userId: encargo.user_id, now,
+  const started = await repo.beginCancel({
+    encargoId: encargo.encargo_id, accountId: encargo.account_id, now,
   });
-  if (!result.changed) throw err('CONFLICT', 'El encargo ya está cancelado', 409);
-  return { encargo_id: encargo.encargo_id, status: 'cancelled', bytes_released: result.bytes };
+  if (!started.changed) throw err('CONFLICT', 'El encargo ya está cancelado', 409);
+  if (encargo.batch_id) await repo.cancelLinkedBatch({ batchId: encargo.batch_id, now });
+  const deleted = await deleteAssetObjects(repo, r2, started.rows, encargo.user_id);
+  return { encargo_id: encargo.encargo_id, status: 'cancelled', bytes_released: deleted.bytes };
 }
 
-export async function scheduleEncargo(repo, { email, encargoId, body, now }) {
+export async function scheduleEncargo(repo, { email, encargoId, body, now, dispatchBatch }) {
   assertNoControlFields(body);
   const encargo = await requireOwnedEncargo(repo, email, encargoId);
   if (encargo.status !== 'approved') throw err('CONFLICT', 'Solo se programa un encargo aprobado', 409);
@@ -162,11 +191,20 @@ export async function scheduleEncargo(repo, { email, encargoId, body, now }) {
   if (body.when === 'now') publishAt = now;
   else if (typeof body.when === 'string' && !Number.isNaN(Date.parse(body.when))) publishAt = new Date(body.when).toISOString();
   else throw err('INVALID_INPUT', 'when debe ser now o una hora', 400);
+  if (encargo.batch_id) {
+    const batch = await assertBatchHash(repo, encargo.batch_id);
+    if (batch.status !== 'APPROVED' || batch.approved_hash !== batch.content_hash) {
+      throw err('CONFLICT', 'El lote no está aprobado', 409);
+    }
+    await repo.schedulePublications({ batchId: batch.batch_id, version: batch.version, publishAt, now });
+    await repo.audit(`access:${email}`, 'SCHEDULE_SET', batch.batch_id, { publish_at: publishAt, encargo_id: encargo.encargo_id }, now);
+  }
   const ok = await repo.markScheduled(encargo.encargo_id, encargo.account_id, publishAt, encargo.platforms, now);
   if (!ok) throw err('CONFLICT', 'Solo se programa un encargo aprobado', 409);
   const today = civilDay(encargo.time_zone, now);
   const prev = await repo.streakRow(encargo.account_id);
   await repo.saveStreak(encargo.account_id, nextStreakCount(prev, today), today, now);
+  if (body.when === 'now' && encargo.batch_id && dispatchBatch) await dispatchBatch(encargo.batch_id);
   return { encargo_id: encargo.encargo_id, status: 'scheduled', publish_at: publishAt };
 }
 
@@ -285,20 +323,21 @@ const PERSON_ROUTES = [
   ['PATCH', /^\/v1\/me$/, (repo, { email, body, now }) => renameMe(repo, { email, body, now })],
   ['POST', /^\/v1\/me\/accounts$/, (repo, { email, body, now }) => createAccount(repo, { email, body, now })],
   ['PATCH', /^\/v1\/me\/accounts\/([^/]+)$/, (repo, { email, body, now }, m) => renameAccount(repo, { email, accountId: m[1], body, now })],
-  ['POST', /^\/v1\/me\/encargos$/, (repo, { email, body, now }) => createEncargo(repo, { email, body, now })],
+  ['POST', /^\/v1\/me\/encargos$/, (repo, ctx) => createEncargo(repo, ctx)],
   ['GET', /^\/v1\/me\/encargos\/([^/]+)$/, (repo, { email }, m) => getEncargo(repo, { email, encargoId: m[1] })],
-  ['POST', /^\/v1\/me\/encargos\/([^/]+)\/decision$/, (repo, { email, body, now }, m) => decideEncargo(repo, { email, encargoId: m[1], body, now })],
-  ['POST', /^\/v1\/me\/encargos\/([^/]+)\/cancel$/, (repo, { email, now }, m) => cancelEncargo(repo, { email, encargoId: m[1], now })],
-  ['POST', /^\/v1\/me\/encargos\/([^/]+)\/schedule$/, (repo, { email, body, now }, m) => scheduleEncargo(repo, { email, encargoId: m[1], body, now })],
+  ['POST', /^\/v1\/me\/uploads$/, (repo, ctx) => createUpload(repo, ctx)],
+  ['POST', /^\/v1\/me\/uploads\/([^/]+)\/complete$/, (repo, ctx, m) => completeUpload(repo, { ...ctx, uploadId: m[1] })],
+  ['POST', /^\/v1\/me\/encargos\/([^/]+)\/decision$/, (repo, ctx, m) => decideEncargo(repo, { ...ctx, encargoId: m[1] })],
+  ['POST', /^\/v1\/me\/encargos\/([^/]+)\/cancel$/, (repo, ctx, m) => cancelEncargo(repo, { ...ctx, encargoId: m[1] })],
+  ['POST', /^\/v1\/me\/encargos\/([^/]+)\/schedule$/, (repo, ctx, m) => scheduleEncargo(repo, { ...ctx, encargoId: m[1] })],
   ['GET', /^\/v1\/me\/accounts\/([^/]+)\/streak$/, (repo, { email, now }, m) => getStreak(repo, { email, accountId: m[1], now })],
   ['GET', /^\/v1\/me\/accounts\/([^/]+)\/activity$/, (repo, { email }, m) => getActivity(repo, { email, accountId: m[1] })],
   ['GET', /^\/v1\/me\/accounts\/([^/]+)\/connections$/, (repo, { email }, m) => listConnections(repo, { email, accountId: m[1] })],
   ['GET', /^\/v1\/me\/connections\/([^/]+)$/, (repo, { email }, m) => getConnection(repo, { email, connectionId: m[1] })],
-  ['GET', /^\/v1\/me\/media\/([^/]+)$/, (repo, { email }, m) => getMedia(repo, { email, sha256: m[1] })],
 ];
 
-export async function dispatchPerson(repo, { method, pathname, body, email, now }) {
-  const route = PERSON_ROUTES.find(([m, re]) => m === method && re.test(pathname));
+export async function dispatchPerson(repo, ctx) {
+  const route = PERSON_ROUTES.find(([method, re]) => method === ctx.method && re.test(ctx.pathname));
   if (!route) throw NOT_FOUND();
-  return route[2](repo, { email, body, now }, route[1].exec(pathname));
+  return route[2](repo, ctx, route[1].exec(ctx.pathname));
 }

@@ -20,6 +20,11 @@ migrations_dir = "migrations"
 binding = "MEDIA"
 id = "2a84b1f0c32346d1b52801f6814faf99"
 
+# Vídeo de la UI. KV MEDIA sigue para PUT /v1/media del bot.
+[[r2_buckets]]
+binding = "MEDIA_R2"
+bucket_name = "influ-poc-media"
+
 [triggers]
 crons = ["*/15 * * * *"]
 
@@ -38,8 +43,9 @@ ACCESS_TEAM_DOMAIN = "ancient-waterfall-b3eb.cloudflareaccess.com"
 ACCESS_AUD = "451e385e4fa58e74bc0f91981e92d9427ae34af5389d58bd62e81b36de3a8a8d"
 
 # Previews de PR (`wrangler preview`). No heredan D1, KV, cron ni secretos de producción.
-# El cron queda solo en el Worker de producción. MEDIA no se enlaza aquí.
-# El id lo resuelve deploy/ensure-preview-d1.mjs en CI; el valor de abajo es un marcador.
+# El cron queda solo en el Worker de producción. El KV MEDIA no se enlaza aquí.
+# R2 de preview es otro bucket: nunca influ-poc-media.
+# El id de D1 lo resuelve deploy/ensure-preview-d1.mjs en CI; el valor de abajo es un marcador.
 
 [previews.vars]
 PUBLISHER_MODE = "mock"
@@ -61,3 +67,7 @@ binding = "DB"
 database_name = "influ-poc-db-preview"
 database_id = "00000000-0000-4000-8000-000000000001"
 migrations_dir = "migrations"
+
+[[previews.r2_buckets]]
+binding = "MEDIA_R2"
+bucket_name = "influ-poc-media-preview"
