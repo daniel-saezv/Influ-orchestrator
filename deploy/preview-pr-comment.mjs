@@ -91,8 +91,8 @@ async function main() {
 const isDirectRun = process.argv[1]
   && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
 if (isDirectRun) {
-  main().catch((error) => {
-    console.error(`::error::${error.message}`);
+  main().catch(() => {
+    console.error('::error::No se pudo publicar el comentario de preview');
     process.exit(1);
   });
 }

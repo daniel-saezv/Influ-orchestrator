@@ -34,8 +34,8 @@ const isDirectRun = process.argv[1]
 if (isDirectRun) {
   try {
     main();
-  } catch (error) {
-    console.error(`::error::${error.message}`);
+  } catch {
+    console.error('::error::No se pudo leer la URL de la preview');
     process.exit(1);
   }
 }
