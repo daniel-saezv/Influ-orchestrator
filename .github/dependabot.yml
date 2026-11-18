@@ -6,3 +6,15 @@ updates:
       interval: weekly
     labels:
       - dependencies
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+    groups:
+      npm:
+        patterns: ["*"]
