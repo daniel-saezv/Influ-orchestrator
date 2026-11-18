@@ -26,7 +26,10 @@ function publicUser(user, accounts) {
   };
 }
 
-function publicEncargo(row) {
+function publicEncargo(row, assets = []) {
+  const deliverable = assets
+    .filter((asset) => asset.role === 'deliverable' && asset.version === row.version && !asset.delete_pending)
+    .at(-1);
   return {
     encargo_id: row.encargo_id,
     account_id: row.account_id,
@@ -39,6 +42,13 @@ function publicEncargo(row) {
     synthetic: row.synthetic,
     publish_at: row.publish_at,
     batch_id: row.batch_id,
+    preview: deliverable ? {
+      sha256: deliverable.sha256,
+      mime: deliverable.mime,
+      size_bytes: deliverable.size_bytes,
+      version: deliverable.version,
+      media_url: `/v1/me/media/${deliverable.sha256}`,
+    } : null,
   };
 }
 
@@ -114,7 +124,8 @@ export async function createEncargo(repo, { email, body, now }) {
 }
 
 export async function getEncargo(repo, { email, encargoId }) {
-  return publicEncargo(await requireOwnedEncargo(repo, email, encargoId));
+  const encargo = await requireOwnedEncargo(repo, email, encargoId);
+  return publicEncargo(encargo, await repo.listAssets(encargoId));
 }
 
 async function assertBatchHash(repo, batchId) {

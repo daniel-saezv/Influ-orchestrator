@@ -50,6 +50,17 @@ jobs:
       - name: Tests acceptance (local)
         run: npm run test:acceptance -- --target local
 
+      - name: UI npm ci
+        working-directory: ui
+        run: npm ci
+
+      - name: Tests UI
+        working-directory: ui
+        run: |
+          npm run lint
+          npm run test:run
+          npm run build
+
       - name: wrangler deploy --dry-run
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -74,6 +85,12 @@ jobs:
 
       - name: npm ci
         run: npm ci
+
+      - name: Construir UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
 
       - name: Sincronizar registro D1 (migraciones ya aplicadas a mano)
         env:
@@ -130,6 +147,12 @@ jobs:
 
       - name: npm ci
         run: npm ci
+
+      - name: Construir UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
 
       - name: Crear la D1 de preview y aplicar las migraciones de la rama
         env:

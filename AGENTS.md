@@ -10,7 +10,7 @@ El orquestador recibe un lote, lo deja a revisión, exige una aprobación ligada
 
 ## Stack y estructura
 
-JavaScript ESM (`"type": "module"`), Node `>=22` (las pruebas usan `node:sqlite`). La API y el runtime de producción son un Cloudflare Worker (plan gratuito) definido en `wrangler.toml`: Worker `influ-poc-orchestrator`, entrada `src/worker.js`, D1 `influ-poc-db`, KV `influ-poc-media`, cron `*/15 * * * *`, `workers_dev = true`. Wrangler 4.164.0 es devDependency. La UI independiente de fase B vive en `ui/`: Vite + React, Tailwind y componentes shadcn (`Button`, `Field`, `Textarea`, `ToggleGroup`, `Progress`, `Skeleton`).
+JavaScript ESM (`"type": "module"`), Node `>=22` (las pruebas usan `node:sqlite`). La API y el runtime de producción son un Cloudflare Worker (plan gratuito) definido en `wrangler.toml`: Worker `influ-poc-orchestrator`, entrada `src/worker.js`, D1 `influ-poc-db`, KV `influ-poc-media`, cron `*/15 * * * *`, assets `ui/dist`, `workers_dev = true`. Wrangler 4.164.0 es devDependency. La UI vive en `ui/`: Vite + React, Tailwind y componentes shadcn (`Button`, `Field`, `Textarea`, `ToggleGroup`, `Progress`, `Skeleton`).
 
 | Ruta | Qué es |
 |---|---|
@@ -24,20 +24,20 @@ JavaScript ESM (`"type": "module"`), Node `>=22` (las pruebas usan `node:sqlite`
 | `n8n/` | Plantillas WF-01..04 importables. No hay instancia n8n; no se ejecutan en CI. |
 | `deploy/` | Guardia de modo mock, sincronización D1, smoke de `/v1/health` y el generador legacy `build.mjs`. |
 | `tests/` | Unitarios (`node:test`) y aceptación local/remota. El shim D1 está en `tests/helpers/d1-shim.mjs`. |
-| `ui/` | SPA mobile-first de encargos. Tiene su propio `package.json`, lockfile, `components.json`, pruebas Vitest y cliente fingido reemplazable; aún no es un asset del Worker. |
+| `ui/` | SPA/PWA mobile-first de encargos. Tiene su propio `package.json`, lockfile, `components.json`, pruebas Vitest y cliente real del mismo origen; su build `dist/` se sirve como asset del Worker. |
 | `docs/` | Arquitectura, contratos, datos, seguridad, instalación, despliegue, n8n, YouTube LIVE. |
 | `reports/` | Informes ya generados. La aceptación local reescribe `reports/acceptance-local.*`; no lo versiones si solo has relanzado las pruebas. |
 
-`ui/components.json` configura shadcn en la aplicación Vite; no se mueve a la raíz. La integración con los assets del Worker corresponde a una fase posterior.
+`ui/components.json` configura shadcn en la aplicación Vite; no se mueve a la raíz. `wrangler.toml` sirve `ui/dist` como assets con fallback SPA; `/v1/*` se ejecuta primero en el Worker para no interferir con la API.
 
 ## Comandos
 
 Comprobados en este clon el 2026-11-18 (Node v22.23.4, npm 10.9.9):
 
 - Instalación: `npm ci` (41 paquetes auditados, 0 vulnerabilidades). Deja Wrangler 4.164.0.
-- Build: no hay build de aplicación. `npm run deploy:dry-run` ejecuta `wrangler deploy --dry-run`, empaqueta el Worker (81.29 KiB / gzip 22.39 KiB en esta ejecución) y sale sin desplegar. `npm run build:deploy` sin argumentos solo imprime el uso del generador legacy (`worker|migrate|secrets`); no es el despliegue canónico.
+- Build: `cd ui && npm run build` genera `ui/dist`; después `npm run deploy:dry-run` ejecuta `wrangler deploy --dry-run` y empaqueta Worker y assets. `npm run build:deploy` sin argumentos solo imprime el uso del generador legacy (`worker|migrate|secrets`); no es el despliegue canónico.
 - Tests: `npm run test:unit` (26 pruebas, 0 fallos) y `npm run test:acceptance -- --target local` (16/16 OK, en memoria). `npm run deploy:guard` exige `PUBLISHER_MODE=mock` y `LIVE_ENABLED_IN_BUILD=false`.
-- UI: `cd ui && npm ci && npm run dev` arranca Vite. La validación aislada es `cd ui && npm run lint && npm run test:run && npm run build`.
+- UI: `cd ui && npm ci && npm run dev` arranca Vite. La validación aislada es `cd ui && npm run lint && npm run test:run && npm run build`. Ese build es obligatorio antes de empaquetar, previsualizar o desplegar el Worker.
 - Arranque: no hay `npm start`. El proceso que sirve la API es el Worker desplegado en Cloudflare (`docs/despliegue-ci.md`). En local, el sustituto que sí arranca la API es la aceptación: `npm run test:acceptance -- --target local`. `npx wrangler dev --local --port 8787` no llega a escuchar: workerd rechaza el export `SERVICE_VERSION` (`Incorrect type for map entry 'SERVICE_VERSION'`). No está corregido. `node bot/influ.mjs` sin entorno termina con código 2 y pide `INFLU_BASE_URL`, `INFLU_BOT_HMAC_SECRET` e `INFLU_APPROVER_HMAC_SECRET`.
 
 `ffprobe` es opcional para el CLI del bot (metadatos de vídeo). En esta máquina está en `/usr/bin/ffprobe`. Los tests no lo necesitan.
@@ -52,7 +52,7 @@ La aceptación remota (`--target remote`), `node n8n/verify-sign-nodes.mjs` y `n
 - `wrangler deploy` conserva los secrets ya cargados en el Worker. Las migraciones D1 ya aplicadas a mano se sincronizan con `deploy/d1-migrations-sync.mjs` antes de `wrangler d1 migrations apply` (lo hace el job de `main`).
 - Pruebas con `node:test`, sin framework añadido. La aceptación local no toca la cuenta de Cloudflare. `wrangler deploy --dry-run` y `wrangler dev` escriben estado en `.wrangler/`; está en `.gitignore`.
 - Plantillas n8n: no las regeneres con `node n8n/build-workflows.mjs` salvo que el cambio sea ese generador; reescribe UUID en `n8n/workflows/`.
-- La UI usa `ui/src/api/fakeApi.js` durante la fase B. El cliente real debe sustituir esa frontera, conservar `credentials: "same-origin"` y no guardar secretos HMAC, cuerpos ni tokens en el navegador.
+- La UI usa `ui/src/api/api.js` en el build servido. Conserva `credentials: "same-origin"`, calcula los SHA-256 de las partes y del archivo en el teléfono y no guarda secretos HMAC, cuerpos ni tokens en el navegador. `fakeApi.js` queda solo para pruebas aisladas.
 
 ## CI/CD
 
@@ -60,7 +60,7 @@ El proyecto **sí se despliega**. En cada push a `main` (y con `workflow_dispatc
 
 | Workflow | Cuándo | Qué hace |
 |---|---|---|
-| `.github/workflows/deploy.yml` | `pull_request`, push a `main`, `workflow_dispatch` | Job `ci` («Validar y empaquetar»): `npm ci`, gitleaks, `deploy:guard`, `test:unit`, aceptación local y `wrangler deploy --dry-run`. No crea buckets. Job `deploy` («Desplegar a producción»): solo si no es un PR y la ref es `main` o el disparo es manual. Sincroniza D1 de producción, aplica migraciones a `influ-poc-db`, crea o reutiliza el bucket `influ-poc-media`, `wrangler deploy` y smoke de `/v1/health`. Job `preview` («Preview de la PR»): solo PRs del mismo repositorio. Crea o reutiliza `influ-poc-db-preview` y el bucket `influ-poc-media-preview`, aplica ahí las migraciones de la rama y sube `wrangler preview`. No toca `influ-poc-db` ni `influ-poc-media`. |
+| `.github/workflows/deploy.yml` | `pull_request`, push a `main`, `workflow_dispatch` | Job `ci` («Validar y empaquetar»): valida raíz y UI (`lint`, Vitest y build) antes de `wrangler deploy --dry-run`. No crea buckets. Job `deploy` («Desplegar a producción»): construye la UI, sincroniza D1 de producción, aplica migraciones a `influ-poc-db`, crea o reutiliza el bucket `influ-poc-media`, despliega Worker + assets y ejecuta el smoke. Job `preview` («Preview de la PR»): construye la UI y publica Worker + assets sobre `influ-poc-db-preview` y `influ-poc-media-preview`, sin tocar recursos de producción. |
 | `.github/workflows/secrets-guard.yml` | `pull_request` y push a `main` | Job «Archivos sensibles no versionados» y job «gitleaks (historial)». |
 | `.github/workflows/copilot-setup-steps.yml` | Cambios de ese archivo, y `workflow_dispatch` | Prepara el entorno del coding agent cuando la sesión corre en GitHub Actions. No despliega. |
 

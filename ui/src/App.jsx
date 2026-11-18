@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, CalendarDays, Check, Clock3, History, Plus, Sparkles, Upload, UserRound } from 'lucide-react'
-import { fakeApi } from './api/fakeApi.js'
+import realApi, { sha256Hex } from './api/api.js'
 import { Button } from './components/ui/button.jsx'
 import { Field, FieldDescription, FieldLabel } from './components/ui/field.jsx'
 import { Progress } from './components/ui/progress.jsx'
@@ -88,7 +88,7 @@ function FilePreview({ file }) {
   return <div className="audio-preview"><Upload aria-hidden="true" /><span>{file.name}</span></div>
 }
 
-function App() {
+function App({ api = realApi }) {
   const [screen, setScreen] = useState('enter')
   const [me, setMe] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -131,74 +131,75 @@ function App() {
   }, [])
 
   const loadMe = useCallback(async () => {
-    const data = await run(() => fakeApi.getMe())
+    const data = await run(() => api.getMe())
     if (!data) return
     setMe(data)
     const streakPairs = await Promise.all(data.accounts.map(async (account) => {
-      const response = await fakeApi.getStreak(account.id)
+      const response = await api.getStreak(account.id)
       return [account.id, response.ok ? response.data.days : 0]
     }))
     setSelectedStreaks(Object.fromEntries(streakPairs))
     setScreen(data.needs_guide ? 'guide' : 'accounts')
-  }, [run])
+  }, [api, run])
 
   const chooseAccount = async (account) => {
     setSelectedAccount(account)
-    const data = await run(() => fakeApi.getStreak(account.id))
+    const data = await run(() => api.getStreak(account.id))
     if (data) setStreak(data)
     setScreen('today')
   }
 
   const createEncargo = async () => {
     if (!selectedAccount) return
+    const created = await run(() => api.createEncargo({
+      account_id: selectedAccount.id,
+      kind,
+      note: kind === 'from_scratch' ? brief : extra,
+      platforms: platforms.map((platform) => platform.toLowerCase()),
+    }))
+    if (!created) return
+    setEncargo(created)
     let uploadSessionId
     if (kind === 'edit') {
-      const total = files.reduce((sum, file) => sum + file.size, 0)
+      const source = files.length === 1 ? files[0] : new Blob(files, { type: files[0]?.type || 'application/octet-stream' })
+      const total = source.size
       if (files.some((file) => file.size > MAX_FILE_BYTES)) {
         setError('Ese archivo supera los 150 MB. Elige uno más pequeño.')
         return
       }
       const interruptedId = window.localStorage.getItem('influ-upload-session')
-      const upload = await run(() => fakeApi.createUpload({
-        name: files.map((file) => file.name).join(', '),
+      const sourceSha256 = await sha256Hex(source)
+      const upload = await run(() => api.createUpload({
+        encargo_id: created.id,
         size_bytes: total,
-        mime: files[0]?.type || 'application/octet-stream',
+        mime: source.type || 'application/octet-stream',
+        sha256: sourceSha256,
         resume_id: interruptedId,
       }))
       if (!upload) return
-      uploadSessionId = upload.id
+      uploadSessionId = upload.upload_id
       window.localStorage.setItem('influ-upload-session', uploadSessionId)
-      const allBlobs = files.flatMap((file) => {
+      const allBlobs = (() => {
         const parts = []
-        for (let offset = 0; offset < file.size; offset += 5 * 1024 * 1024) {
-          parts.push(file.slice(offset, offset + 5 * 1024 * 1024))
+        for (let offset = 0; offset < source.size; offset += 5 * 1024 * 1024) {
+          parts.push(source.slice(offset, offset + 5 * 1024 * 1024))
         }
         return parts
-      })
+      })()
       const uploadedParts = new Set(upload.uploaded_parts ?? [])
       for (let index = 0; index < allBlobs.length; index += 1) {
         if (uploadedParts.has(index + 1)) continue
-        const uploaded = await run(() => fakeApi.uploadPart(uploadSessionId, index + 1, allBlobs[index]))
+        const uploaded = await run(() => api.uploadPart(uploadSessionId, index + 1, allBlobs[index]))
         if (!uploaded) {
           setScreen('source')
           return
         }
         setUploadProgress(Math.round(((index + 1) / allBlobs.length) * 100))
       }
-      const completed = await run(() => fakeApi.completeUpload(uploadSessionId))
+      const completed = await run(() => api.completeUpload(uploadSessionId, { sha256: sourceSha256 }))
       if (!completed) return
       window.localStorage.removeItem('influ-upload-session')
     }
-    const created = await run(() => fakeApi.createEncargo({
-      account_id: selectedAccount.id,
-      kind,
-      note: kind === 'from_scratch' ? brief : extra,
-      platforms,
-      upload_session_id: uploadSessionId,
-      synthetic: kind === 'from_scratch',
-    }))
-    if (!created) return
-    setEncargo(created)
     setScreen('preparing')
   }
 
@@ -207,11 +208,11 @@ function App() {
     let stopped = false
     const poll = async () => {
       if (document.visibilityState !== 'visible' || stopped) return
-      const response = await fakeApi.getEncargo(encargo.id)
+      const response = await api.getEncargo(encargo.id)
       if (!response.ok || stopped) return
       setEncargo(response.data)
       if (response.data.status === 'ready') {
-        const media = await fakeApi.getMedia(response.data.result_sha256)
+        const media = await api.getMedia(response.data.result_sha256)
         if (media.ok) setPreview(media.data)
         setScreen('preview')
       }
@@ -222,10 +223,10 @@ function App() {
       stopped = true
       window.clearInterval(timer)
     }
-  }, [screen, encargo])
+  }, [api, screen, encargo])
 
   const approve = async () => {
-    const approved = await run(() => fakeApi.decideEncargo(encargo.id, {
+    const approved = await run(() => api.decideEncargo(encargo.id, {
       decision: 'approve',
       version: encargo.version,
       content_hash: encargo.result_sha256,
@@ -237,7 +238,7 @@ function App() {
   }
 
   const requestChanges = async () => {
-    const changed = await run(() => fakeApi.decideEncargo(encargo.id, {
+    const changed = await run(() => api.decideEncargo(encargo.id, {
       decision: 'changes',
       version: encargo.version,
       content_hash: encargo.result_sha256,
@@ -251,15 +252,14 @@ function App() {
   }
 
   const schedule = async () => {
-    const scheduled = await run(() => fakeApi.scheduleEncargo(encargo.id, {
-      mode: scheduleMode,
-      publish_at: scheduleMode === 'at' ? new Date(scheduleAt).toISOString() : undefined,
-      time_zone: timeZone,
+    const scheduled = await run(() => api.scheduleEncargo(encargo.id, {
+      when: scheduleMode === 'at' ? new Date(scheduleAt).toISOString() : 'now',
     }))
     if (!scheduled) return
-    setResult(scheduled)
-    setEncargo(scheduled)
-    const nextStreak = await fakeApi.getStreak(selectedAccount.id)
+    const receipt = { ...encargo, ...scheduled }
+    setResult(receipt)
+    setEncargo(receipt)
+    const nextStreak = await api.getStreak(selectedAccount.id)
     if (nextStreak.ok) setStreak(nextStreak.data)
     setScreen('done')
   }
@@ -281,7 +281,7 @@ function App() {
     <Shell eyebrow="Tu espacio de creación" title="Hola. Vamos a preparar algo bonito." footer={
       <Button className="primary-action" size="lg" onClick={loadMe} disabled={loading}>Entrar</Button>
     }>
-      <p className="lead">Ya hay una sesión fingida. En la fase G entrará Cloudflare Access.</p>
+      <p className="lead">Esta sesión se protege con Cloudflare Access.</p>
     </Shell>
   )
 
@@ -300,7 +300,7 @@ function App() {
   if (screen === 'name') return (
     <Shell eyebrow="Para conocerte" title="¿Cómo te llamas?" footer={
       <Button className="primary-action" size="lg" disabled={!name.trim() || loading} onClick={async () => {
-        const data = await run(() => fakeApi.createMe({ display_name: name, time_zone: timeZone }))
+        const data = await run(() => api.createMe({ display_name: name, time_zone: timeZone }))
         if (data) {
           setMe(data)
           setName('')
@@ -331,9 +331,9 @@ function App() {
         {editingName === 'account' ? (
           <form className="inline-form" onSubmit={async (event) => {
             event.preventDefault()
-            const created = await run(() => fakeApi.createAccount({ name: accountName }))
+            const created = await run(() => api.createAccount({ name: accountName }))
             if (created) {
-              const response = await fakeApi.getMe()
+              const response = await api.getMe()
               if (response.ok) setMe(response.data)
               setAccountName('')
               setEditingName(false)
@@ -346,7 +346,7 @@ function App() {
         {editingName === 'name' ? (
           <form className="inline-form" onSubmit={async (event) => {
             event.preventDefault()
-            const data = await run(() => fakeApi.updateMe({ display_name: name }))
+            const data = await run(() => api.updateMe({ display_name: name }))
             if (data) {
               setMe(data)
               setEditingName(false)
@@ -366,7 +366,7 @@ function App() {
     <Shell eyebrow={selectedAccount?.name} title="Qué ha pasado" onBack={() => setScreen('accounts')} footer={
       <Button className="primary-action" size="lg" onClick={() => setScreen('accounts')}>Volver a mis cuentas</Button>
     }>
-      {loading ? <Loading /> : <ActivityLoader account={selectedAccount} activity={activity} setActivity={setActivity} setError={setError} />}
+      {loading ? <Loading /> : <ActivityLoader api={api} account={selectedAccount} activity={activity} setActivity={setActivity} setError={setError} />}
     </Shell>
   )
 
@@ -464,7 +464,9 @@ function App() {
       </div>
     }>
       <div className="vertical-preview">
-        {files[0]?.type.startsWith('video/') ? <FilePreview file={files[0]} /> : <div className="mock-video"><Sparkles aria-hidden="true" /><span>Previa 9:16</span></div>}
+        {preview?.url && preview.content_type?.startsWith('video/')
+          ? <video className="selected-preview" src={preview.url} playsInline controls />
+          : <div className="mock-video"><Sparkles aria-hidden="true" /><span>Previa 9:16</span></div>}
         <span className="preview-version">Versión {encargo?.version}</span>
       </div>
       {(preview?.synthetic || preview?.contains_synthetic_media || encargo?.synthetic) && <p className="ai-note">Hecho con ayuda de IA</p>}
@@ -526,13 +528,13 @@ function App() {
   return <Shell title="Algo salió mal"><p>No he encontrado esta pantalla.</p></Shell>
 }
 
-function ActivityLoader({ account, activity, setActivity, setError }) {
+function ActivityLoader({ api, account, activity, setActivity, setError }) {
   useEffect(() => {
-    fakeApi.getActivity(account.id).then((response) => {
+    api.getActivity(account.id).then((response) => {
       if (response.ok) setActivity(response.data.items)
       else setError(response.error.message)
     })
-  }, [account.id, setActivity, setError])
+  }, [account.id, api, setActivity, setError])
 
   if (!activity.length) return <p className="empty-state"><History aria-hidden="true" />Todavía no hay simulaciones.</p>
   return (
