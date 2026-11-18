@@ -55,3 +55,7 @@ node tests/acceptance/run.mjs --target remote   # TEST 01–13 + seguridad, cont
 Resultados: `reports/test-report.md`.
 
 Documentación: `docs/` (empieza por `docs/arquitectura.md`). Licencia: [MIT](LICENSE) — ver alternativas en la PR de preparación a repo público. Antes de publicar: `docs/github-seguridad.md`, `docs/contenido-generado-ia.md`.
+
+## Notas de prueba
+
+Prueba agente Copilot con modelo concreto
