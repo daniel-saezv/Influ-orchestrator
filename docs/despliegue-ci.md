@@ -16,6 +16,7 @@ Crea un **API Token** (My Profile → API Tokens → Create Custom Token) con pe
 | Account | **Workers Scripts → Edit** |
 | Account | **Workers KV Storage → Edit** |
 | Account | **D1 → Edit** |
+| Account | **Access: Apps and Policies → Edit** |
 
 Opcional si gestionas workers.dev manualmente: **Workers Subdomain → Read** (el smoke resuelve la URL vía API con el token anterior).
 
@@ -59,7 +60,9 @@ El job `preview` corre en `pull_request` cuando la cabeza está en este reposito
 4. `npx wrangler preview --name pr-<número> --json` sube la preview. La URL sale en un solo comentario (`<!-- influ-preview -->`) junto al SHA de cabeza. Cada push actualiza ese comentario.
 5. `GET /v1/health` de esa URL debe responder 200, 301, 302, 401 o 403.
 
-`workers_dev` y `preview_urls` están activos. El bloque `[previews]` copia las vars de producción (modo mock y Access) y el binding `DB` de `influ-poc-db-preview`. No copia el cron ni el KV `MEDIA`: la preview no dispara el despacho de producción y no escribe en el namespace de media. `/v1/health` no usa KV. Con Access configurado, health sin JWT responde 403 del propio Worker.
+`workers_dev` y `preview_urls` están activos. El bloque `[previews]` copia las vars de producción (modo mock y Access) y el binding `DB` de `influ-poc-db-preview`. No copia el cron ni el KV `MEDIA`: la preview no dispara el despacho de producción y no escribe en el namespace de media. `/v1/health` no usa KV.
+
+`deploy/ensure-preview-access.mjs` crea, si no existe, la aplicación Access `influ-poc-orchestrator previews`. Cubre `*-influ-poc-orchestrator.<subdominio>.workers.dev` y las previews de este Worker, y le enlaza las mismas políticas reutilizables que la app de producción (personas y service token). No modifica esa app. El Worker sigue exigiendo `Cf-Access-Jwt-Assertion`: el script escribe en `[previews.vars]` el AUD de la app de preview y deja intacto el AUD de producción. El issuer sigue siendo `ACCESS_TEAM_DOMAIN`. Sin cookie, el edge redirige al login de Access; la petición no llega al Worker.
 
 Todas las previews comparten `influ-poc-db-preview`. `migrations apply` solo avanza. Dos PRs con migraciones distintas pueden dejar el esquema en el punto de la que corrió última.
 

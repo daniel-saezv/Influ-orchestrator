@@ -1,0 +1,190 @@
+#!/usr/bin/env node
+/**
+ * Asegura una aplicación Access para las previews del Worker.
+ * Usa las políticas reutilizables de la app de producción y escribe su AUD
+ * solo en [previews.vars]. No cambia la app ni el AUD de influ-poc-db / producción.
+ *
+ * Env: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
+ */
+import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+export const PRODUCTION_ACCESS_AUD = '451e385e4fa58e74bc0f91981e92d9427ae34af5389d58bd62e81b36de3a8a8d';
+export const PRODUCTION_ACCESS_DOMAIN = 'influ-poc-orchestrator.gamu-development.workers.dev';
+export const PREVIEW_ACCESS_HOST = '*-influ-poc-orchestrator.gamu-development.workers.dev';
+export const PREVIEW_ACCESS_APP_NAME = 'influ-poc-orchestrator previews';
+export const WORKER_SCRIPT_NAME = 'influ-poc-orchestrator';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const WRANGLER_TOML = join(ROOT, 'wrangler.toml');
+
+export function patchPreviewAccessAud(text, aud) {
+  if (!/^[0-9a-f]{64}$/i.test(aud)) throw new Error('El AUD de la preview no es válido');
+  const marker = '[previews.vars]';
+  const at = text.indexOf(marker);
+  if (at < 0) throw new Error('wrangler.toml no tiene [previews.vars]');
+  const head = text.slice(0, at);
+  const tail = text.slice(at);
+  if (!head.includes(`ACCESS_AUD = "${PRODUCTION_ACCESS_AUD}"`)) {
+    throw new Error('El AUD de producción no está en wrangler.toml');
+  }
+  if (!/ACCESS_AUD = "[^"]+"/.test(tail)) throw new Error('Falta ACCESS_AUD en la preview');
+  const nextTail = tail.replace(/ACCESS_AUD = "[^"]+"/, `ACCESS_AUD = "${aud}"`);
+  const next = head + nextTail;
+  if (!next.slice(0, next.indexOf(marker)).includes(`ACCESS_AUD = "${PRODUCTION_ACCESS_AUD}"`)) {
+    throw new Error('El AUD de producción ha cambiado');
+  }
+  return next;
+}
+
+function policyIds(app) {
+  return (app?.policies ?? []).map((policy) => (typeof policy === 'string' ? policy : policy?.id)).filter(Boolean);
+}
+
+export function coversPreview(app, workerId) {
+  const destinations = app?.destinations ?? [];
+  return destinations.some((destination) => {
+    if (destination?.type === 'public' && destination.uri === PREVIEW_ACCESS_HOST) return true;
+    if (destination?.type === 'preview_worker' && destination.worker_id === workerId) return true;
+    return false;
+  }) || (app?.self_hosted_domains ?? []).includes(PREVIEW_ACCESS_HOST)
+    || app?.name === PREVIEW_ACCESS_APP_NAME;
+}
+
+async function cf(accountId, token, path, init = {}) {
+  const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.success === false) {
+    const code = body.errors?.[0]?.code ?? body.errors?.[0]?.error ?? 'error';
+    const error = new Error(`Cloudflare Access HTTP ${response.status} ${code}`);
+    error.status = response.status;
+    throw error;
+  }
+  return body;
+}
+
+async function listApps(accountId, token) {
+  const apps = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const body = await cf(accountId, token, `/accounts/${accountId}/access/apps?page=${page}&per_page=50`);
+    const rows = body.result ?? [];
+    apps.push(...rows);
+    const total = body.result_info?.total_pages ?? 1;
+    if (page >= total || rows.length === 0) break;
+  }
+  return apps;
+}
+
+async function workerId(accountId, token) {
+  const body = await cf(accountId, token, `/accounts/${accountId}/workers/scripts`);
+  const rows = body.result ?? [];
+  const match = rows.find((row) => row === WORKER_SCRIPT_NAME || row?.id === WORKER_SCRIPT_NAME || row?.name === WORKER_SCRIPT_NAME);
+  const id = typeof match === 'object' ? match?.tag ?? match?.id : null;
+  if (!id || id === WORKER_SCRIPT_NAME) throw new Error('No se encontró el id del Worker');
+  return id;
+}
+
+async function createPreviewApp(accountId, token, { worker, policies }) {
+  const common = {
+    type: 'self_hosted',
+    name: PREVIEW_ACCESS_APP_NAME,
+    session_duration: '24h',
+    http_only_cookie_attribute: true,
+    app_launcher_visible: false,
+    policies,
+  };
+  const attempts = [
+    {
+      domain: PREVIEW_ACCESS_HOST,
+      destinations: [
+        { type: 'public', uri: PREVIEW_ACCESS_HOST },
+        { type: 'preview_worker', worker_id: worker },
+      ],
+    },
+    {
+      domain: PREVIEW_ACCESS_HOST,
+      destinations: [{ type: 'preview_worker', worker_id: worker }],
+    },
+  ];
+  let last;
+  for (const attempt of attempts) {
+    try {
+      const created = await cf(accountId, token, `/accounts/${accountId}/access/apps`, {
+        method: 'POST',
+        body: JSON.stringify({ ...common, ...attempt }),
+      });
+      return created.result;
+    } catch (error) {
+      last = error;
+      if (error.status === 401 || error.status === 403) throw error;
+    }
+  }
+  throw last;
+}
+
+async function syncPreviewPolicies(accountId, token, preview, policies) {
+  const attached = new Set(policyIds(preview));
+  if (policies.every((id) => attached.has(id))) return preview;
+  const current = await cf(accountId, token, `/accounts/${accountId}/access/apps/${preview.id}`);
+  const app = current.result;
+  if (policies.every((id) => policyIds(app).includes(id))) return app;
+  const readonly = new Set(['id', 'uid', 'aud', 'created_at', 'updated_at']);
+  const body = {};
+  for (const [key, value] of Object.entries(app)) {
+    if (!readonly.has(key)) body[key] = value;
+  }
+  body.policies = policies;
+  const updated = await cf(accountId, token, `/accounts/${accountId}/access/apps/${preview.id}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return updated.result;
+}
+
+export async function ensurePreviewAccess(accountId, token) {
+  const apps = await listApps(accountId, token);
+  const production = apps.find((app) => app.aud === PRODUCTION_ACCESS_AUD || app.domain === PRODUCTION_ACCESS_DOMAIN);
+  if (!production) throw new Error('No está la aplicación Access de producción');
+  const policies = policyIds(production);
+  if (policies.length === 0) throw new Error('La aplicación de producción no tiene políticas');
+  const worker = await workerId(accountId, token);
+  let preview = apps.find((app) => app.id !== production.id && coversPreview(app, worker));
+  if (!preview) preview = await createPreviewApp(accountId, token, { worker, policies });
+  if (!preview?.id || preview.id === production.id) {
+    throw new Error('La preview no puede reutilizar la app de producción');
+  }
+  preview = await syncPreviewPolicies(accountId, token, preview, policies);
+  if (!preview.aud || preview.id === production.id) {
+    throw new Error('La aplicación de preview no quedó separada de producción');
+  }
+  return preview.aud;
+}
+
+async function main() {
+  const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+  if (!token || !accountId) throw new Error('Faltan credenciales de Cloudflare');
+  const aud = await ensurePreviewAccess(accountId, token);
+  const next = patchPreviewAccessAud(readFileSync(WRANGLER_TOML, 'utf8'), aud);
+  writeFileSync(WRANGLER_TOML, next);
+  console.log('Access de preview listo');
+}
+
+const isDirectRun = process.argv[1]
+  && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+if (isDirectRun) {
+  main().catch((error) => {
+    const status = error.status === 401 || error.status === 403
+      ? ' El token necesita el permiso Access: Apps and Policies Write.'
+      : '';
+    console.error(`::error::No se pudo proteger la preview con Access.${status}`);
+    process.exit(1);
+  });
+}

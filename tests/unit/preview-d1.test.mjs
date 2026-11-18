@@ -12,6 +12,7 @@ import {
 } from '../../deploy/ensure-preview-d1.mjs';
 import { previewCommentBody, PREVIEW_COMMENT_MARKER } from '../../deploy/preview-pr-comment.mjs';
 import { previewUrlFromWranglerOutput } from '../../deploy/preview-url.mjs';
+import { patchPreviewAccessAud, PRODUCTION_ACCESS_AUD } from '../../deploy/ensure-preview-access.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const previewId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
@@ -56,6 +57,15 @@ test('el comentario de preview es único y lleva URL y SHA', () => {
   assert.match(body, /https:\/\/pr-1-influ-poc-orchestrator\.example\.workers\.dev/);
   assert.match(body, new RegExp(sha));
   assert.match(body, /influ-poc-db-preview/);
+});
+
+test('el AUD de preview no pisa el de producción', () => {
+  const text = `[vars]\nACCESS_AUD = "${PRODUCTION_ACCESS_AUD}"\n\n[previews.vars]\nACCESS_AUD = "${PRODUCTION_ACCESS_AUD}"\n`;
+  const previewAud = 'a'.repeat(64);
+  const next = patchPreviewAccessAud(text, previewAud);
+  assert.match(next, new RegExp(`\\[vars\\]\\nACCESS_AUD = "${PRODUCTION_ACCESS_AUD}"`));
+  assert.match(next, new RegExp(`\\[previews\\.vars\\]\\nACCESS_AUD = "${previewAud}"`));
+  assert.throws(() => patchPreviewAccessAud(text, 'no-es-aud'), /AUD/);
 });
 
 test('lee la URL del JSON de wrangler preview aunque haya texto delante', () => {
