@@ -553,13 +553,29 @@ async function getStreak(accountId) {
   const account = requireUserAccount(accountId)
   if (!account) return missing()
   const events = state.activity.get(account.id) ?? []
-  const days = [...new Set(events.map((event) => event.published_at.slice(0, 10)))].sort().reverse()
+  const timeZone = currentUser().time_zone
+  const dayKey = (value) => new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(value))
+  const uniqueDays = [...new Set(events.map((event) => dayKey(event.published_at)))].sort().reverse()
+  let current = 0
+  const [year, month, day] = dayKey(nowValue).split('-').map(Number)
+  const cursor = new Date(Date.UTC(year, month - 1, day, 12))
+  for (const day of uniqueDays) {
+    const expected = cursor.toISOString().slice(0, 10)
+    if (day !== expected) break
+    current += 1
+    cursor.setUTCDate(cursor.getUTCDate() - 1)
+  }
   return success({
     account_id: account.id,
-    current: days.length ? 1 : 0,
-    longest: days.length,
-    days: days.length,
-    day_dates: days,
+    current,
+    longest: uniqueDays.length,
+    days: current,
+    day_dates: uniqueDays,
   })
 }
 

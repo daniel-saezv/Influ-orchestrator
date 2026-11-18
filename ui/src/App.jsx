@@ -142,10 +142,12 @@ function App() {
         setError('Ese archivo supera los 150 MB. Elige uno más pequeño.')
         return
       }
+      const interruptedId = window.localStorage.getItem('influ-upload-session')
       const upload = await run(() => fakeApi.createUpload({
         name: files.map((file) => file.name).join(', '),
         size_bytes: total,
         mime: files[0]?.type || 'application/octet-stream',
+        resume_id: interruptedId,
       }))
       if (!upload) return
       uploadSessionId = upload.id
@@ -157,7 +159,9 @@ function App() {
         }
         return parts
       })
+      const uploadedParts = new Set(upload.uploaded_parts ?? [])
       for (let index = 0; index < allBlobs.length; index += 1) {
+        if (uploadedParts.has(index + 1)) continue
         const uploaded = await run(() => fakeApi.uploadPart(uploadSessionId, index + 1, allBlobs[index]))
         if (!uploaded) {
           setScreen('source')
@@ -311,9 +315,10 @@ function App() {
         {editingName === 'account' ? (
           <form className="inline-form" onSubmit={async (event) => {
             event.preventDefault()
-            const data = await run(() => fakeApi.createAccount({ name: accountName }))
-            if (data) {
-              setMe(data)
+            const created = await run(() => fakeApi.createAccount({ name: accountName }))
+            if (created) {
+              const response = await fakeApi.getMe()
+              if (response.ok) setMe(response.data)
               setAccountName('')
               setEditingName(false)
             }
@@ -508,7 +513,7 @@ function App() {
 function ActivityLoader({ account, activity, setActivity, setError }) {
   useEffect(() => {
     fakeApi.getActivity(account.id).then((response) => {
-      if (response.ok) setActivity(response.data)
+      if (response.ok) setActivity(response.data.items)
       else setError(response.error.message)
     })
   }, [account.id, setActivity, setError])

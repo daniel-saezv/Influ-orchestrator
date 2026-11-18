@@ -1,16 +1,25 @@
-# React + Vite
+# UI de encargos
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Aplicación mobile-first de la fase B, hecha con Vite, React, Tailwind y shadcn. Consume una API fingida sustituible por el cliente del Worker en la fase G.
 
-Currently, two official plugins are available:
+## Instalar y arrancar
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+cd ui
+npm ci
+npm run dev
+```
 
-## React Compiler
+Vite muestra la URL local. No hay que arrancar Wrangler: `wrangler dev --local` no soporta actualmente el export `SERVICE_VERSION`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Validar
 
-## Expanding the Oxlint configuration
+```bash
+npm run lint
+npm run test:run
+npm run build
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+La API de `src/api/` simula todas las rutas `/v1/me`, conserva el aislamiento entre cuentas y solo guarda en `localStorage` el id de una subida interrumpida. El navegador no contiene HMAC ni secretos. Cualquier cliente real futuro debe usar `credentials: "same-origin"`.
+
+La PWA aún no tiene service worker ni está conectada al Worker. El texto de «Añadir a pantalla de inicio» se limita a preparar la experiencia cuando `display-mode` no sea `standalone`.
