@@ -196,6 +196,7 @@ export async function completeUpload(repo, { email, uploadId, body, now }) {
   return {
     upload_id: uploadId,
     encargo_id: session.encargo_id,
+    kind: encargo?.kind,
     sha256: fileSha,
     size_bytes: session.size_bytes,
     complete: true,
