@@ -79,7 +79,7 @@ Dependabot (`.github/dependabot.yml`): `github-actions` semanal y agrupado, y `n
 
 Una sola copia, en `.agents/skills/shadcn` (lock: `skills-lock.json`, origen `shadcn-ui/ui` @ `968d8cb9dc42ae5d52e8fd356cf84596ec832a26`).
 
-Para trabajo de UI, usa también `design-taste-frontend` y `high-end-visual-design` (no se versionan; se instalan al arrancar el entorno cloud o Copilot, y en local con `bash scripts/install-design-skills.sh`).
+Para trabajo de UI, usa también `design-taste-frontend` y `high-end-visual-design`. No se versionan (`.gitignore`). `scripts/install-design-skills.sh` las copia en `.agents/skills/<nombre>/SKILL.md` (`npx skills add … --copy`). Cursor descubre las skills al arrancar el proceso, así que en un cloud agent tienen que estar ya en el disco del Build: el `install` de `.cursor/environment.json` corre al crear el Build y el checkout posterior conserva esos ficheros ignorados, igual que `node_modules`. El mismo script lo ejecuta el job `copilot-setup-steps` y, en local, `bash scripts/install-design-skills.sh`. Si falta `SKILL.md`, el script termina con error.
 
 Esa ruta la leen los dos:
 
@@ -135,7 +135,7 @@ No hay `.github/copilot-instructions.md`. El cloud agent ya carga este `AGENTS.m
 
 ## Cursor Cloud specific instructions
 
-La preparación es `npm ci` y `scripts/install-design-skills.sh` (ver `.cursor/environment.json`). No hay Docker, base de datos local ni navegador de pruebas. En el cloud agent de esta cuenta Node ya es v22.23.4.
+La preparación versionada es `npm ci` y `scripts/install-design-skills.sh` (`.cursor/environment.json`). Cursor ejecuta ese fichero solo cuando el entorno guardado tiene **environment.json location** apuntando a `.cursor/environment.json`. Un entorno personal creado por forward-fill queda con esa ubicación en None, gana al fichero del repositorio y sus Builds no corren `install`: el agente arranca sin las dos skills. En el dashboard de ese entorno, environment.json location tiene que ser `.cursor/environment.json`; al guardarlo, el Build nuevo tiene que terminar bien para que los agentes siguientes las encuentren al arrancar. No hay Docker, base de datos local ni navegador de pruebas. En el cloud agent de esta cuenta Node ya es v22.23.4.
 
 Para validar un cambio: `npm ci`, `npm run test:unit`, `npm run test:acceptance -- --target local` y `npm run deploy:guard`. Esos tres no necesitan secretos. `npm run deploy:dry-run` empaqueta en local sin token. El job `ci` tampoco crea el bucket de producción. `deploy/ensure-r2-bucket.mjs production` solo corre en el deploy de `main`, y `preview` solo crea `influ-poc-media-preview`. Esos pasos fallan hasta que R2 esté activado y el token tenga Workers R2 Storage → Edit.
 

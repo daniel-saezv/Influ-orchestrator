@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
@@ -8,26 +8,34 @@ log() {
   printf '%s\n' "install-design-skills: $*" >&2
 }
 
+skill_ready() {
+  [ -f ".agents/skills/$1/SKILL.md" ]
+}
+
 install_one() {
   url="$1"
   name="$2"
   dest=".agents/skills/$name"
-  if [ -f "$dest/SKILL.md" ]; then
+  if skill_ready "$name"; then
     return 0
   fi
-  if ! npx --yes skills add "$url" --skill "$name" -y; then
-    log "no se pudo instalar $name; se continúa"
+  npx --yes skills add "$url" --skill "$name" --copy -y
+  if ! skill_ready "$name"; then
+    log "falta $dest/SKILL.md tras instalar $name"
+    exit 1
   fi
 }
 
-if ! command -v npx >/dev/null 2>&1; then
-  log "npx no disponible; se omiten las skills de diseño"
-  exit 0
-fi
+missing=0
+for name in design-taste-frontend high-end-visual-design; do
+  if ! skill_ready "$name"; then
+    missing=1
+  fi
+done
 
-if ! curl -fsS --connect-timeout 10 --max-time 25 https://github.com/ >/dev/null 2>&1; then
-  log "sin red; se omiten las skills de diseño"
-  exit 0
+if [ "$missing" -eq 1 ] && ! command -v npx >/dev/null 2>&1; then
+  log "npx no disponible"
+  exit 1
 fi
 
 install_one "https://github.com/Leonxlnx/taste-skill" "design-taste-frontend"
@@ -36,5 +44,3 @@ install_one "https://github.com/Leonxlnx/taste-skill-classics" "high-end-visual-
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git checkout -- skills-lock.json 2>/dev/null || true
 fi
-
-exit 0
