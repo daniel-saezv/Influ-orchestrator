@@ -499,11 +499,11 @@ if (target === 'local') {
     const now = Math.floor(Date.now() / 1000);
     const jwt = signer.sign({ aud, exp, email: 'ana@example.com' });
     const serviceJwt = signer.sign({
-      aud: mcpAud, exp, nbf: now - 30, iss: 'https://team.example.com', common_name: mcpClientId, sub: '', type: 'app',
+      aud: mcpAud, exp, iss: 'https://team.example.com', common_name: mcpClientId, sub: '', type: 'app',
     });
     const uiJwt = signer.sign({ aud, exp, nbf: now - 30, iss: 'https://team.example.com', email: 'ana@example.com' });
     const otherName = signer.sign({
-      aud: mcpAud, exp, nbf: now - 30, iss: 'https://team.example.com', common_name: 'cli-aceptacion.access', sub: '', type: 'app',
+      aud: mcpAud, exp, iss: 'https://team.example.com', common_name: 'cli-aceptacion.access', sub: '', type: 'app',
     });
     const mcp = async (dbEnv, bearer, method, accessJwt = serviceJwt) => {
       const res = await workerMod.default.fetch(new Request('https://local.test/mcp', {

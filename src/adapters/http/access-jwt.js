@@ -102,7 +102,7 @@ function assertLifetimeAndIssuer(payload, env, nowSec, strict) {
   const expPresent = payload.exp !== undefined && payload.exp !== null && payload.exp !== '';
   const nbfPresent = payload.nbf !== undefined && payload.nbf !== null && payload.nbf !== '';
   const issPresent = payload.iss !== undefined && payload.iss !== null && payload.iss !== '';
-  if (strict && (!expPresent || !nbfPresent || !issPresent)) {
+  if (strict && (!expPresent || !issPresent)) {
     throw err('ACCESS_DENIED', 'JWT Access incompleto', 403);
   }
   if (expPresent) {
