@@ -18,6 +18,7 @@ import {
   Upload,
   UserRound,
   X,
+  XCircle,
   Zap,
 } from 'lucide-react'
 import realApi, { sha256Hex } from './api/api.js'
@@ -36,6 +37,7 @@ const platformLabel = (value) => String(value).split(',').map((item) => PLATFORM
 const MAX_FILE_BYTES = 150 * 1024 * 1024
 const PART_BYTES = 5 * 1024 * 1024
 const UPLOAD_KEY = 'influ-upload-session'
+const NON_CANCELLABLE_ENCARGO_STATUSES = new Set(['cancelled', 'scheduled'])
 const SAFE_PREVIEW_TYPES = new Set([
   'image/avif',
   'image/bmp',
@@ -104,6 +106,34 @@ function Section({ label, children, id }) {
 function ErrorLine({ children }) {
   if (!children) return null
   return <p className="error" role="alert">{children}</p>
+}
+
+function canCancelEncargo(status) {
+  return Boolean(status) && !NON_CANCELLABLE_ENCARGO_STATUSES.has(status)
+}
+
+function CancelEncargoAction({ encargo, busy, onConfirm }) {
+  const [confirming, setConfirming] = useState(false)
+  if (!canCancelEncargo(encargo?.status)) return null
+  const disabled = Boolean(busy)
+  if (confirming) {
+    return (
+      <div className="cancel-confirm" role="alertdialog" aria-labelledby="cancel-title" aria-describedby="cancel-desc">
+        <p id="cancel-title" className="cancel-confirm-title">¿Cancelar este encargo?</p>
+        <p id="cancel-desc" className="fine">No se publicará y dejarás de trabajar en esta versión.</p>
+        <div className="cancel-confirm-actions">
+          <Button variant="outline" className="cta-secondary" onClick={() => setConfirming(false)} disabled={disabled}>No, seguir</Button>
+          <Button variant="destructive" className="cta-secondary" onClick={onConfirm} disabled={disabled}>Sí, cancelar</Button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <Button variant="ghost" className="cancel-link" onClick={() => setConfirming(true)} disabled={disabled}>
+      <XCircle aria-hidden="true" data-icon="inline-start" />
+      Cancelar encargo
+    </Button>
+  )
 }
 
 function PlatformChoices({ value, onChange }) {
@@ -527,6 +557,10 @@ function App({ api = realApi }) {
       const response = await api.getEncargo(encargoId)
       if (!response.ok || stopped) return
       setEncargo(response.data)
+      if (response.data.status === 'cancelled') {
+        go('cancelled', 'back')
+        return
+      }
       if (response.data.status === 'ready') {
         const media = await api.getMedia(response.data.result_sha256)
         if (stopped) return
@@ -587,6 +621,22 @@ function App({ api = realApi }) {
     if (nextStreak.ok) setStreaks((current) => ({ ...current, [account.id]: nextStreak.data.days }))
     setBusy('')
     go('done')
+  }
+
+  const cancelActiveEncargo = async () => {
+    if (!encargo?.id || busy) return
+    const cancelled = await run('cancel', () => api.cancelEncargo(encargo.id))
+    if (!cancelled) return
+    setEncargo({ ...encargo, ...cancelled, id: cancelled.id ?? encargo.id })
+    setApproved(false)
+    setPreview(null)
+    setPosterOnly(false)
+    setChangeOpen(false)
+    setChangeNote('')
+    setUploading(false)
+    window.localStorage.removeItem(UPLOAD_KEY)
+    notify('Encargo cancelado')
+    go('cancelled', 'back')
   }
 
   const requestChanges = async (event) => {
@@ -767,8 +817,10 @@ function App({ api = realApi }) {
           ))}
         </ol>
         <p className="fine">Puedes dejarlo en segundo plano. Miro el estado cada 15 segundos, solo con la app visible.</p>
+        <ErrorLine>{error}</ErrorLine>
       </>
     )
+    cta = <CancelEncargoAction encargo={encargo} busy={busy} onConfirm={cancelActiveEncargo} />
   }
 
   if (screen === 'preview') {
@@ -818,11 +870,37 @@ function App({ api = realApi }) {
       </>
     )
     cta = (
+      <div className="cta-stack">
+        <div className="cta-pair">
+          <Button size="lg" className="cta" onClick={approveAndSchedule} disabled={Boolean(busy)}>
+            <CtaLabel icon={Check} busy={busy === 'approve'}>{scheduleMode === 'at' ? 'Aprobar y programar' : 'Aprobar y publicar'}</CtaLabel>
+          </Button>
+          <Button size="lg" variant="outline" className="cta-secondary" onClick={() => setChangeOpen(true)} disabled={Boolean(busy)}>Pedir un cambio</Button>
+        </div>
+        <CancelEncargoAction encargo={encargo} busy={busy} onConfirm={cancelActiveEncargo} />
+      </div>
+    )
+  }
+
+  if (screen === 'cancelled') {
+    view = (
+      <>
+        <TopBar />
+        <Heading eyebrow="Estado: cancelado">Encargo <em>cancelado</em></Heading>
+        <Badge variant="secondary" className="status-pill"><XCircle aria-hidden="true" />Cancelado</Badge>
+        <p className="lead">Ya no se preparará ni se publicará en la simulación.</p>
+        {encargo?.platforms?.length > 0 && (
+          <dl className="ticket">
+            <div><dt>Plataformas</dt><dd>{platformLabel(encargo.platforms.join(','))}</dd></div>
+            <div><dt>Estado</dt><dd>cancelado</dd></div>
+          </dl>
+        )}
+      </>
+    )
+    cta = (
       <div className="cta-pair">
-        <Button size="lg" className="cta" onClick={approveAndSchedule} disabled={Boolean(busy)}>
-          <CtaLabel icon={Check} busy={busy === 'approve'}>{scheduleMode === 'at' ? 'Aprobar y programar' : 'Aprobar y publicar'}</CtaLabel>
-        </Button>
-        <Button size="lg" variant="outline" className="cta-secondary" onClick={() => setChangeOpen(true)} disabled={Boolean(busy)}>Pedir un cambio</Button>
+        <Button size="lg" className="cta" onClick={() => startOver('studio')}><CtaLabel icon={Plus}>Crear otro</CtaLabel></Button>
+        <Button size="lg" variant="outline" className="cta-secondary" onClick={() => startOver('history')}>Ver historial</Button>
       </div>
     )
   }

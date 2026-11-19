@@ -57,6 +57,23 @@ describe('mobile creation flow', () => {
     expect(screen.getByRole('button', { name: 'Historial' })).toHaveAttribute('aria-current', 'page')
   })
 
+  it('cancels an encargo from the preview step after confirmation', async () => {
+    const user = userEvent.setup()
+    render(<App api={fakeApi} />)
+    expect(await screen.findByRole('heading', { name: 'Tu camerino está listo.' })).toBeInTheDocument()
+    await user.type(screen.getByLabelText('Nombre'), 'Alex')
+    await user.click(screen.getByRole('button', { name: 'Empezar' }))
+    await user.type(screen.getByLabelText('Tu idea'), 'Cancelar antes de publicar')
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Cancelar encargo' }))
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Sí, cancelar' }))
+    expect(await screen.findByRole('heading', { name: 'Encargo cancelado' })).toBeInTheDocument()
+    expect(getFakeApiState().encargos.at(-1).status).toBe('cancelled')
+  })
+
   it('uploads a plain crop without an AI notice and schedules it for later', async () => {
     resetFakeApi({ onboarded: true })
     configureFakeApi({ transitionReads: 0.5 })

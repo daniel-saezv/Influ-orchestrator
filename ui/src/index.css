@@ -163,6 +163,13 @@ h1 em { font-style: italic; font-weight: 380; color: var(--saffron-ink); }
 .cta-orb svg { width: 1.15rem; height: 1.15rem; }
 .cta:not(:disabled):hover .cta-orb { transform: translateX(2px) scale(1.05); }
 .cta-pair { display: grid; gap: .6rem; }
+.cta-stack { display: flex; flex-direction: column; gap: .45rem; width: 100%; }
+.cancel-link { width: 100%; color: var(--destructive); }
+.cancel-link:hover { color: var(--destructive); background: color-mix(in srgb, var(--destructive) 10%, transparent); }
+.cancel-confirm { display: flex; flex-direction: column; gap: .65rem; padding: 1rem; border: 1px solid color-mix(in srgb, var(--destructive) 28%, var(--border)); border-radius: 1.15rem; background: color-mix(in srgb, var(--destructive) 6%, var(--paper)); }
+.cancel-confirm-title { margin: 0; font-weight: 700; }
+.cancel-confirm-actions { display: grid; gap: .6rem; }
+.status-pill { display: inline-flex; gap: .5rem; align-items: center; width: fit-content; color: var(--destructive); border-color: color-mix(in srgb, var(--destructive) 24%, var(--border)); }
 .cta-secondary { width: 100%; height: 3.25rem; }
 .spin { animation: spin .9s linear infinite; }
 
