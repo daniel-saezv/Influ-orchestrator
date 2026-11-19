@@ -35,4 +35,6 @@ function Badge({ className, variant = "default", asChild = false, ...props }) {
   )
 }
 
+// Shared with consumers that compose custom shadcn status elements.
+// oxlint-disable-next-line react/only-export-components
 export { Badge, badgeVariants }
