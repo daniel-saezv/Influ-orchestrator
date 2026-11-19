@@ -368,6 +368,106 @@ if (target === 'local') {
     eq(denied.error.code, 'ACCESS_DENIED', 'código');
     log.push('bob recibe 404 en encargo, pieza, racha, actividad y conexión; service token 403 en /v1/me; conexiones propias vacías');
   });
+
+  await T('EXTRA S5', 'Bot HMAC: firma inválida, reclamo doble y hash que no cuadra', async (log) => {
+    const { createHash } = await import('node:crypto');
+    const { createD1Shim, createKvShim } = await import('../helpers/d1-shim.mjs');
+    const { createR2Shim } = await import('../helpers/r2-shim.mjs');
+    const { pollEncargoOnce } = await import('../../bot/client-lib.mjs');
+    const { R2ObjectStore } = await import('../../src/adapters/storage/r2-object-store.js');
+    const aud = 'aud-bot-aceptacion';
+    const signer = createAccessSigner();
+    const key = await cryptoKeyFromPublic(signer.publicKey);
+    workerMod.setAccessJwtDeps({ getCertKeys: async () => new Map([['test-kid', key]]) });
+    const r2 = createR2Shim();
+    const env = {
+      DB: createD1Shim(join(ROOT, 'migrations')), MEDIA: createKvShim(), MEDIA_R2: r2,
+      BOT_HMAC_SECRET: 'local-test-bot-secret-0123456789abcdef', APPROVER_HMAC_SECRET: 'local-test-approver-secret-0123456789ab',
+      PUBLISHER_MODE: 'mock', PUBLISHER_PROVIDER: 'youtube',
+      ACCESS_TEAM_DOMAIN: 'team.example.com', ACCESS_AUD: aud,
+      RATE_LIMIT_USER_PER_MINUTE: '600',
+    };
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const token = (email) => signer.sign({ aud, exp, email });
+    const service = signer.sign({ aud, exp, common_name: 'bot-aceptacion', type: 'app' });
+    const call = async (method, path, jwt, { json, raw, headers } = {}) => {
+      const res = await workerMod.default.fetch(new Request(`https://local.test${path}`, {
+        method,
+        headers: {
+          'cf-access-jwt-assertion': jwt,
+          ...(json ? { 'content-type': 'application/json' } : {}),
+          ...(raw ? { 'content-length': String(raw.byteLength) } : {}),
+          ...(headers ?? {}),
+        },
+        body: json ? JSON.stringify(json) : raw,
+      }), env);
+      const payload = await res.json();
+      return { status: res.status, ...payload };
+    };
+    const bot = new OrchestratorClient({
+      baseUrl: 'https://local.test', botSecret: env.BOT_HMAC_SECRET, approverSecret: env.APPROVER_HMAC_SECRET,
+      accessHeaders: { 'cf-access-jwt-assertion': service },
+      transport: (url, init) => workerMod.default.fetch(new Request(url, init), env),
+    });
+    const ana = await call('POST', '/v1/me', token('ana@example.com'), { json: { display_name: 'Ana', time_zone: 'Europe/Madrid' } });
+    assert(ana.ok, JSON.stringify(ana.error));
+    async function editWith(bytes) {
+      const created = await call('POST', '/v1/me/encargos', token('ana@example.com'), {
+        json: { account_id: ana.data.accounts[0].account_id, kind: 'edit', platforms: ['youtube'] },
+      });
+      assert(created.ok, JSON.stringify(created.error));
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      const opened = await call('POST', '/v1/me/uploads', token('ana@example.com'), {
+        json: { encargo_id: created.data.encargo_id, size_bytes: bytes.byteLength, mime: 'video/mp4', sha256: digest },
+      });
+      assert(opened.status === 201, JSON.stringify(opened.error));
+      const put = await call('PUT', `/v1/me/uploads/${opened.data.upload_id}/parts/1`, token('ana@example.com'), {
+        raw: bytes, headers: { 'content-type': 'video/mp4', 'x-content-sha256': digest },
+      });
+      assert(put.ok, JSON.stringify(put.error));
+      const done = await call('POST', `/v1/me/uploads/${opened.data.upload_id}/complete`, token('ana@example.com'), { json: { sha256: digest } });
+      assert(done.data.status === 'queued', JSON.stringify(done.error));
+      return { encargoId: created.data.encargo_id, digest };
+    }
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    const encargo = await editWith(bytes);
+    const bad = await bot.call('GET', '/v1/encargos?status=queued', {
+      signOverride: sign({ secret: 'x'.repeat(40), keyId: 'bot', method: 'GET', pathAndQuery: '/v1/encargos?status=queued' }),
+    });
+    eq(bad.status, 401, 'firma inválida');
+    eq(bad.error.code, 'UNAUTHENTICATED', 'código de firma');
+    const claim = await bot.claimEncargo(encargo.encargoId);
+    assert(claim.ok, JSON.stringify(claim.error));
+    const secondClaim = await bot.claimEncargo(encargo.encargoId);
+    eq(secondClaim.status, 409, 'reclamo doble');
+    eq(secondClaim.error.code, 'CONFLICT', 'código de reclamo');
+    const mismatch = await bot.submitEncargoResult(encargo.encargoId, {
+      synthetic: false, content_hash: 'ab'.repeat(32), file_sha256: 'cd'.repeat(32),
+    });
+    eq(mismatch.status, 409, 'hash que no cuadra');
+    eq(mismatch.error.code, 'INTEGRITY_FILE_MISMATCH', 'código de huella');
+    const viewed = await call('GET', `/v1/me/encargos/${encargo.encargoId}`, token('ana@example.com'));
+    eq(viewed.data.status, 'failed', 'estado failed');
+
+    const otherBytes = new Uint8Array([9, 8, 7, 6]);
+    const other = await editWith(otherBytes);
+    let generated = 0;
+    const store = new R2ObjectStore(r2);
+    const polled = await pollEncargoOnce(bot, {
+      head: (key) => store.head(key),
+      get: async () => new Uint8Array([1, 1, 1, 1]),
+      generate: async () => { generated += 1; return { content_hash: 'ab'.repeat(32) }; },
+    });
+    assert(polled.ok === false, 'el bucle no da por bueno un hash distinto');
+    eq(polled.phase, 'integrity', 'fase de integridad');
+    eq(generated, 0, 'no hay Imagine');
+    const polledView = await call('GET', `/v1/me/encargos/${other.encargoId}`, token('ana@example.com'));
+    eq(polledView.data.status, 'failed', 'el bucle deja el encargo en failed');
+    const empty = await pollEncargoOnce(bot, { generate: async () => ({ content_hash: 'ab'.repeat(32) }) });
+    eq(empty.generated, false, 'cola vacía');
+    eq(empty.ok, true, 'vuelta vacía');
+    log.push('firma inválida=401; reclamo doble=409; file_sha256 distinto=409 y status failed; el bucle no genera si los bytes no cuadran; cola vacía sin Imagine');
+  });
 }
 
 // ---------- Informe ----------

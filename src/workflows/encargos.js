@@ -6,6 +6,7 @@ import {
   assertAssetBytes, assertName, assertNoControlFields, assertPlatforms, assertSha256, assertTimeZone,
   civilDay, localTime, nextStreakCount, visibleStreak,
 } from '../core/domain/encargos.js';
+import { MAX_CLASS_B_GLOBAL, MAX_CLASS_B_USER } from '../core/domain/r2-quota.js';
 import { deleteAssetObjects } from './r2-gc.js';
 import { completeUpload, createUpload } from './uploads.js';
 
@@ -269,13 +270,34 @@ export async function listQueued(repo, status) {
   return { encargos: await repo.listQueuedEncargos() };
 }
 
-export async function claimEncargo(repo, { encargoId, now }) {
+async function botEncargo(repo, encargoId) {
+  const row = await repo.encargoById(encargoId);
+  if (!row) return null;
+  return {
+    encargo_id: row.encargo_id,
+    account_id: row.account_id,
+    account_name: row.account_name,
+    kind: row.kind,
+    note: row.note,
+    status: row.status,
+    platforms: row.platforms,
+    version: row.version,
+    file_sha256: await repo.sourceFileSha(encargoId),
+    assets: await repo.listSourceAssets(encargoId),
+  };
+}
+
+export async function claimEncargo(repo, { encargoId, now, actor = 'grok-bot' }) {
   if (!UUID_RE.test(encargoId ?? '')) throw NOT_FOUND();
   const ok = await repo.claimEncargo(encargoId, now);
-  if (ok) return { encargo_id: encargoId, status: 'claimed' };
-  const row = await repo.encargoById(encargoId);
-  if (!row) throw NOT_FOUND();
-  throw err('CONFLICT', 'El encargo no está en la cola', 409);
+  if (!ok) {
+    const row = await repo.encargoById(encargoId);
+    if (!row) throw NOT_FOUND();
+    throw err('CONFLICT', 'El encargo no está en la cola', 409);
+  }
+  const encargo = await botEncargo(repo, encargoId);
+  await repo.audit(actor, 'ENCARGO_CLAIMED', null, { encargo_id: encargoId, account_id: encargo.account_id }, now);
+  return { encargo_id: encargoId, status: 'claimed', encargo };
 }
 
 function assertR2Key(role, value) {
@@ -292,7 +314,58 @@ function assertMime(value) {
   return value;
 }
 
-export async function submitEncargoResult(repo, { encargoId, body, now }) {
+function failureMessage(code) {
+  if (code === 'INTEGRITY_PART_MISMATCH') return 'La parte almacenada no coincide';
+  if (code === 'INTEGRITY_FILE_MISMATCH') return 'El SHA-256 del archivo no coincide';
+  return 'El origen no supera la comprobación';
+}
+
+function failureCode(body) {
+  const code = body?.error?.code;
+  if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{2,40}$/.test(code)) return code;
+  return 'INTEGRITY_ERROR';
+}
+
+async function markFailed(repo, encargo, now, actor, code) {
+  const ok = await repo.failEncargo(encargo.encargo_id, now);
+  if (!ok) throw err('CONFLICT', 'El encargo no está reclamado', 409);
+  const detail = { encargo_id: encargo.encargo_id, account_id: encargo.account_id, code };
+  await repo.audit(actor, 'ENCARGO_FAILED', null, detail, now);
+  await repo.recordEncargoEvent(encargo.account_id, encargo.encargo_id, now, 'failed', { code });
+  throw err(code, failureMessage(code), 409, { encargo_id: encargo.encargo_id, status: 'failed' });
+}
+
+// head de cada parte (clase B) y comparación del SHA-256 anunciado. El Worker no hashea el cuerpo.
+async function checkSourceIntegrity(repo, r2, encargo, body, now, actor) {
+  const assets = await repo.listSourceAssets(encargo.encargo_id);
+  if (!assets.length) return;
+  if (!r2) throw err('R2_UNAVAILABLE', 'El almacenamiento no está disponible', 503);
+  for (const asset of assets) {
+    const reserved = await repo.reserveDaily(encargo.user_id, 'b', now, MAX_CLASS_B_USER, MAX_CLASS_B_GLOBAL);
+    if (!reserved) throw err('QUOTA_EXCEEDED', 'Tope de lecturas alcanzado', 413);
+    let head;
+    try {
+      head = await r2.head(asset.r2_key);
+    } catch {
+      await repo.releaseDaily(encargo.user_id, 'b', now);
+      throw err('R2_UNAVAILABLE', 'No se pudo comprobar el origen', 503);
+    }
+    if (!head || head.sha256 !== asset.sha256 || Number(head.size) !== Number(asset.size_bytes)) {
+      await markFailed(repo, encargo, now, actor, 'INTEGRITY_PART_MISMATCH');
+    }
+  }
+  const announced = await repo.sourceFileSha(encargo.encargo_id);
+  const reported = typeof body.file_sha256 === 'string' ? body.file_sha256.trim().toLowerCase() : '';
+  const reportedOk = /^[a-f0-9]{64}$/.test(reported);
+  if (body.failed === true && !reportedOk) await markFailed(repo, encargo, now, actor, failureCode(body));
+  if (!reportedOk) throw err('INVALID_INPUT', 'file_sha256 debe ser un SHA-256 en hex', 400);
+  const single = assets.length === 1 ? assets[0].sha256 : null;
+  if (!announced || reported !== announced || (single && single !== announced)) {
+    await markFailed(repo, encargo, now, actor, 'INTEGRITY_FILE_MISMATCH');
+  }
+}
+
+export async function submitEncargoResult(repo, { encargoId, body, now, r2 = null, actor = 'grok-bot' }) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw err('INVALID_INPUT', 'El cuerpo debe ser un objeto JSON', 400);
   for (const key of ['mode', 'live', 'publisher_mode']) {
     if (key in body) throw err('INVALID_INPUT', `Campo no permitido: ${key}`, 400);
@@ -301,6 +374,8 @@ export async function submitEncargoResult(repo, { encargoId, body, now }) {
   const encargo = await repo.encargoById(encargoId);
   if (!encargo) throw NOT_FOUND();
   if (encargo.status !== 'claimed') throw err('CONFLICT', 'El encargo no está reclamado', 409);
+  await checkSourceIntegrity(repo, r2, encargo, body, now, actor);
+  if (body.failed === true) await markFailed(repo, encargo, now, actor, failureCode(body));
   if (typeof body.synthetic !== 'boolean') throw err('INVALID_INPUT', 'synthetic obligatorio', 400);
   if (encargo.kind === 'from_scratch' && body.synthetic !== true) {
     throw err('INVALID_INPUT', 'Un encargo desde cero es material generado', 400);
@@ -331,6 +406,9 @@ export async function submitEncargoResult(repo, { encargoId, body, now }) {
     });
   }
   await repo.recordEncargoEvent(encargo.account_id, encargoId, now, 'ready', { version, synthetic: body.synthetic });
+  await repo.audit(actor, 'ENCARGO_RESULT', batchId, {
+    encargo_id: encargoId, account_id: encargo.account_id, synthetic: body.synthetic, version,
+  }, now);
   return { encargo_id: encargoId, status: 'ready', version, content_hash: contentHash, synthetic: body.synthetic };
 }
 

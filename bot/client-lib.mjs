@@ -74,12 +74,16 @@ function encargoItems(response) {
 
 export function encargoAssets(encargo) {
   const nested = encargo?.assets ?? encargo?.media ?? encargo?.encargo_assets ?? [];
-  return Array.isArray(nested) ? nested : Object.values(nested);
+  const list = Array.isArray(nested) ? nested : Object.values(nested);
+  return list.filter((asset) => !asset?.role || asset.role === 'source');
 }
 
-// Lee integridad fuera del Worker. Las funciones head/get se pasan desde el runtime:
-// head(key) devuelve metadata y get(key) devuelve bytes. Si A/F aún no publica lectura
-// para el bot, ambas operaciones quedan sin ejecutar y el encargo puede marcarse failed.
+function assetKey(asset) {
+  return String(asset?.r2_key ?? asset?.key ?? asset?.object_key ?? '');
+}
+
+// Recalcula fuera del Worker: head de cada parte y SHA-256 del archivo juntado.
+// head(key) devuelve metadatos y get(key) devuelve bytes. El Worker no hashea el cuerpo.
 export async function verifyEncargoIntegrity(encargo, { head, get }) {
   if (typeof head !== 'function' || typeof get !== 'function') {
     const error = new Error('LECTURA_R2_NO_DISPONIBLE');
@@ -87,13 +91,15 @@ export async function verifyEncargoIntegrity(encargo, { head, get }) {
     throw error;
   }
   const parts = [];
-  for (const asset of encargoAssets(encargo)) {
-    const key = asset.r2_key ?? asset.key ?? asset.object_key;
+  const assets = [...encargoAssets(encargo)].sort((a, b) => assetKey(a).localeCompare(assetKey(b)));
+  for (const asset of assets) {
+    const key = assetKey(asset);
     if (!key) throw Object.assign(new Error('ENCARGO_SIN_CLAVE_R2'), { code: 'INTEGRITY_MISSING_KEY' });
     const announced = asset.sha256 ?? asset.checksums?.sha256;
     const info = await head(key);
+    const headSha = info?.sha256 ?? info?.checksums?.sha256;
     const actualSize = info?.size ?? info?.size_bytes;
-    if (announced && (info?.sha256 ?? info?.checksums?.sha256) && (info?.sha256 ?? info?.checksums?.sha256) !== announced) {
+    if (announced && headSha && headSha !== announced) {
       throw Object.assign(new Error('SHA256_PARTE_NO_COINCIDE'), { code: 'INTEGRITY_PART_MISMATCH', key });
     }
     if (asset.size_bytes !== undefined && actualSize !== undefined && Number(asset.size_bytes) !== Number(actualSize)) {
@@ -107,15 +113,25 @@ export async function verifyEncargoIntegrity(encargo, { head, get }) {
     parts.push(bytes);
   }
   if (!parts.length) throw Object.assign(new Error('ENCARGO_SIN_PARTES'), { code: 'INTEGRITY_NO_PARTS' });
-  const fileSha256 = createHash('sha256').update(Buffer.concat(parts)).digest('hex');
-  const announcedFile = encargo.media?.sha256 ?? encargo.sha256
-    ?? encargo.upload_session?.sha256 ?? encargo.upload_session?.sha256_file;
+  const joined = Buffer.concat(parts);
+  const fileSha256 = createHash('sha256').update(joined).digest('hex');
+  const announcedFile = encargo.file_sha256 ?? encargo.media?.sha256 ?? encargo.sha256
+    ?? encargo.upload_session?.file_sha256 ?? encargo.upload_session?.sha256 ?? encargo.upload_session?.sha256_file;
   if (announcedFile && fileSha256 !== announcedFile) {
-    throw Object.assign(new Error('SHA256_ARCHIVO_NO_COINCIDE'), { code: 'INTEGRITY_FILE_MISMATCH' });
+    throw Object.assign(new Error('SHA256_ARCHIVO_NO_COINCIDE'), { code: 'INTEGRITY_FILE_MISMATCH', fileSha256 });
   }
-  return { sha256: fileSha256, sizeBytes: Buffer.concat(parts).length, parts };
+  return { sha256: fileSha256, sizeBytes: joined.length, parts };
 }
 
+async function reportFailure(submitResult, id, error) {
+  return submitResult(id, {
+    failed: true,
+    ...(typeof error.fileSha256 === 'string' ? { file_sha256: error.fileSha256 } : {}),
+    error: { code: error.code ?? 'INTEGRITY_ERROR', message: error.message },
+  }).catch(() => null);
+}
+
+// Una vuelta: cola vacía no reclama ni genera. Con encargo, reclama, comprueba el origen y responde.
 export async function pollEncargoOnce(client, {
   head,
   get,
@@ -123,45 +139,68 @@ export async function pollEncargoOnce(client, {
   submitResult = (id, result) => client.submitEncargoResult(id, result),
 } = {}) {
   const queue = await client.getQueuedEncargos();
-  if (!queue.ok) return { ok: false, queue, phase: 'queue' };
+  if (!queue.ok) return { ok: false, queue, phase: 'queue', generated: false };
   const items = encargoItems(queue);
   if (items.length === 0) return { ok: true, generated: false, items: [] };
+  if (typeof generate !== 'function') {
+    return {
+      ok: false, generated: false, phase: 'generate',
+      error: { code: 'GENERATOR_NOT_CONFIGURED', message: 'No hay generador para esta vuelta' },
+    };
+  }
 
   const encargo = items[0];
   const id = encargo.id ?? encargo.encargo_id;
-  if (!id) return { ok: false, error: { code: 'VALIDATION_ERROR', message: 'Encargo sin id' }, phase: 'claim' };
+  if (!id) return { ok: false, generated: false, error: { code: 'VALIDATION_ERROR', message: 'Encargo sin id' }, phase: 'claim' };
   const claimed = await client.claimEncargo(id);
-  if (!claimed.ok) return { ok: false, claimed, phase: 'claim' };
+  if (!claimed.ok) return { ok: false, generated: false, claimed, phase: 'claim' };
   const claimedEncargo = claimed.data?.encargo ?? claimed.encargo ?? claimed.data ?? encargo;
 
-  try {
-    const integrity = await verifyEncargoIntegrity(claimedEncargo, { head, get });
-    if (typeof generate !== 'function') {
-      throw Object.assign(new Error('GENERADOR_NO_CONFIGURADO'), { code: 'GENERATOR_NOT_CONFIGURED' });
+  let integrity = null;
+  if (encargoAssets(claimedEncargo).length && typeof head === 'function' && typeof get === 'function') {
+    try {
+      integrity = await verifyEncargoIntegrity(claimedEncargo, { head, get });
+    } catch (error) {
+      const failure = await reportFailure(submitResult, id, error);
+      return {
+        ok: false, generated: false, phase: 'integrity', failure,
+        error: { code: error.code ?? 'INTEGRITY_ERROR', message: error.message },
+      };
     }
-    const piece = await generate(claimedEncargo, integrity);
-    if (!piece) throw Object.assign(new Error('GENERADOR_SIN_PIEZA'), { code: 'GENERATOR_NO_RESULT' });
-    const synthetic = syntheticForEncargo(claimedEncargo, piece);
-    const batch = piece.batch ?? piece.batch_id ?? claimedEncargo.batch_id ?? claimedEncargo.batch;
-    const result = {
-      ...piece.result,
-      batch,
-      batch_id: piece.batch_id ?? (typeof batch === 'string' ? batch : batch?.batch_id) ?? claimedEncargo.batch_id,
-      synthetic,
-      media: piece.media,
-    };
-    const sent = await submitResult(id, result);
-    if (!sent.ok) return { ok: false, sent, phase: 'result' };
-    return { ok: true, generated: true, synthetic, integrity, encargo: claimedEncargo, result: sent };
-  } catch (error) {
-    // The documented result route is the only route that can return failure context.
-    // No alternate failure route is invented.
-    const failure = await submitResult(id, {
-      failed: true,
-      error: { code: error.code ?? 'INTEGRITY_ERROR', message: error.message },
-    }).catch(() => null);
-    return { ok: false, error: { code: error.code ?? 'INTEGRITY_ERROR', message: error.message }, phase: 'integrity', failure };
   }
+
+  let piece;
+  try {
+    piece = await generate(claimedEncargo, integrity);
+  } catch (error) {
+    const failure = await reportFailure(submitResult, id, error);
+    return {
+      ok: false, generated: false, phase: 'generate', failure,
+      error: { code: error.code ?? 'GENERATOR_ERROR', message: error.message },
+    };
+  }
+  if (!piece) {
+    const error = Object.assign(new Error('El generador no devolvió pieza'), { code: 'GENERATOR_NO_RESULT' });
+    const failure = await reportFailure(submitResult, id, error);
+    return { ok: false, generated: false, phase: 'generate', failure, error: { code: error.code, message: error.message } };
+  }
+
+  const synthetic = syntheticForEncargo(claimedEncargo, piece);
+  const batch = piece.batch ?? piece.batch_id ?? claimedEncargo.batch_id ?? claimedEncargo.batch;
+  const fileSha = integrity?.sha256 ?? claimedEncargo.file_sha256;
+  const result = {
+    ...piece.result,
+    batch,
+    batch_id: piece.batch_id ?? (typeof batch === 'string' ? batch : batch?.batch_id) ?? claimedEncargo.batch_id,
+    synthetic,
+    media: piece.media,
+  };
+  if (piece.content_hash && !result.content_hash) result.content_hash = piece.content_hash;
+  if (piece.deliverable && !result.deliverable) result.deliverable = piece.deliverable;
+  if (typeof fileSha === 'string') result.file_sha256 = fileSha;
+  const sent = await submitResult(id, result);
+  if (!sent.ok) return { ok: false, generated: false, sent, phase: 'result' };
+  return { ok: true, generated: true, synthetic, integrity, encargo: claimedEncargo, result: sent };
 }
 
 // Prepara un lote desde un archivo batch.json con rutas locales de media (media.path).

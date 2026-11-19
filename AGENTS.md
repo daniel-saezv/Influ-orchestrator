@@ -20,7 +20,7 @@ JavaScript ESM (`"type": "module"`), Node `>=22` (las pruebas usan `node:sqlite`
 | `src/worker.js` | `fetch` + `scheduled`. |
 | `bot/` | CLI de Grok Bot (`bot/influ.mjs`) y cliente HMAC. |
 | `content/batches/` | Lotes. `LOTE-0001` es el ejemplo. |
-| `migrations/` | SQL de D1 (`0001`–`0003`). |
+| `migrations/` | SQL de D1 (`0001`–`0006`). |
 | `n8n/` | Plantillas WF-01..04 importables. No hay instancia n8n; no se ejecutan en CI. |
 | `deploy/` | Guardia de modo mock, sincronización D1, smoke de `/v1/health` y el generador legacy `build.mjs`. |
 | `tests/` | Unitarios (`node:test`) y aceptación local/remota. El shim D1 está en `tests/helpers/d1-shim.mjs`. |
@@ -36,7 +36,7 @@ Comprobados en este clon el 2026-11-18 (Node v22.23.4, npm 10.9.9):
 
 - Instalación: `npm ci` (41 paquetes auditados, 0 vulnerabilidades). Deja Wrangler 4.164.0.
 - Build: `cd ui && npm run build` genera `ui/dist`; después `npm run deploy:dry-run` ejecuta `wrangler deploy --dry-run` y empaqueta Worker y assets. `npm run build:deploy` sin argumentos solo imprime el uso del generador legacy (`worker|migrate|secrets`); no es el despliegue canónico.
-- Tests: `npm run test:unit` (26 pruebas, 0 fallos) y `npm run test:acceptance -- --target local` (16/16 OK, en memoria). `npm run deploy:guard` exige `PUBLISHER_MODE=mock` y `LIVE_ENABLED_IN_BUILD=false`.
+- Tests: `npm run test:unit` (69 pruebas, 0 fallos) y `npm run test:acceptance -- --target local` (18/18 OK, en memoria). `npm run deploy:guard` exige `PUBLISHER_MODE=mock` y `LIVE_ENABLED_IN_BUILD=false`.
 - UI: `cd ui && npm ci && npm run dev` arranca Vite. La validación aislada es `cd ui && npm run lint && npm run test:run && npm run build`. Ese build es obligatorio antes de empaquetar, previsualizar o desplegar el Worker.
 - Arranque: no hay `npm start`. El proceso que sirve la API es el Worker desplegado en Cloudflare (`docs/despliegue-ci.md`). En local, el sustituto que sí arranca la API es la aceptación: `npm run test:acceptance -- --target local`. `npx wrangler dev --local --port 8787` no llega a escuchar: workerd rechaza el export `SERVICE_VERSION` (`Incorrect type for map entry 'SERVICE_VERSION'`). No está corregido. `node bot/influ.mjs` sin entorno termina con código 2 y pide `INFLU_BASE_URL`, `INFLU_BOT_HMAC_SECRET` e `INFLU_APPROVER_HMAC_SECRET`.
 
