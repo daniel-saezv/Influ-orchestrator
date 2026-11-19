@@ -60,8 +60,8 @@ async function handleMcp(request, env, ctx) {
   return createInfluMcpHandler(env)(omitAccessClientSecret(request), env, ctx);
 }
 
-async function maybeNotifyEncargo(env, ctx, method, pathname, data) {
-  if (method !== 'POST' || pathname !== '/v1/me/encargos' || data?.status !== 'queued') return;
+async function maybeNotifyEncargo(env, ctx, method, data) {
+  if (method === 'GET' || method === 'HEAD' || data?.status !== 'queued' || !data?.encargo_id || !data?.kind) return;
   const task = notifyEncargoQueued(env, {
     encargo_id: data.encargo_id, kind: data.kind, status: data.status,
   }).then((result) => {
@@ -182,7 +182,7 @@ export default {
         });
         const status = data?.__http ?? 200;
         if (data && typeof data === 'object') delete data.__http;
-        if (status < 400) await maybeNotifyEncargo(env, execCtx, request.method, url.pathname, data);
+        if (status < 400) await maybeNotifyEncargo(env, execCtx, request.method, data);
         return json(status, { ok: true, data });
       }
       if (!isAuthenticatedAttempt(request)) {

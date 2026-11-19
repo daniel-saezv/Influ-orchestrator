@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createD1Shim, createKvShim } from '../helpers/d1-shim.mjs';
@@ -251,6 +252,51 @@ test('webhook ausente no llama y un webhook que falla no bloquea la cola', async
     const repo = new D1Repository(failing.DB);
     const queued = await repo.listQueuedEncargos();
     assert.equal(queued.some((row) => row.encargo_id === blockedBody.data.encargo_id), true);
+
+    const editDraft = await post(failing, { account_id: account2, kind: 'edit', platforms: ['youtube'] });
+    const editBody = await editDraft.json();
+    assert.equal(editDraft.status, 200);
+    assert.equal(editBody.data.status, 'draft');
+    assert.equal(calls.length, 1, 'borrador edit no dispara el aviso');
+
+    const bytes = new Uint8Array([3, 1, 4, 1, 5, 9, 2, 6]);
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const opened = await workerMod.fetch(new Request('https://local.test/v1/me/uploads', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'cf-access-jwt-assertion': person },
+      body: JSON.stringify({
+        encargo_id: editBody.data.encargo_id, size_bytes: bytes.length, mime: 'video/mp4', sha256: digest,
+      }),
+    }), failing);
+    assert.equal(opened.status, 201);
+    const upload = (await opened.json()).data;
+    const put = await workerMod.fetch(new Request(`https://local.test/v1/me/uploads/${upload.upload_id}/parts/1`, {
+      method: 'PUT',
+      headers: {
+        'content-type': 'video/mp4',
+        'content-length': String(bytes.length),
+        'x-content-sha256': digest,
+        'cf-access-jwt-assertion': person,
+      },
+      body: bytes,
+    }), failing);
+    assert.equal(put.status, 200);
+    const completed = await workerMod.fetch(new Request(`https://local.test/v1/me/uploads/${upload.upload_id}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'cf-access-jwt-assertion': person },
+      body: JSON.stringify({ sha256: digest }),
+    }), failing);
+    const completedBody = await completed.json();
+    assert.equal(completedBody.data.status, 'queued');
+    assert.equal(calls.length, 2, 'cierre de subida dispara el aviso');
+    assert.equal(JSON.parse(calls[1].body).kind, 'edit');
+    assert.equal(JSON.parse(calls[1].body).encargo_id, editBody.data.encargo_id);
+
+    const view = await workerMod.fetch(new Request(`https://local.test/v1/me/encargos/${editBody.data.encargo_id}`, {
+      headers: { 'cf-access-jwt-assertion': person },
+    }), failing);
+    assert.equal(view.status, 200);
+    assert.equal(calls.length, 2, 'consultar la cola no vuelve a avisar');
   } finally {
     setEncargoWebhookTransport(null);
   }

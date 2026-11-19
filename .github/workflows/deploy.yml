@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
 
 permissions:
@@ -11,12 +12,13 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: ${{ github.event_name == 'pull_request' && format('deploy-pr-{0}', github.event.pull_request.number) || format('deploy-{0}', github.ref) }}
   cancel-in-progress: true
 
 jobs:
   ci:
     name: Validar y empaquetar
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -130,7 +132,7 @@ jobs:
   preview:
     name: Preview de la PR
     needs: ci
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action != 'closed'
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -214,3 +216,28 @@ jobs:
           }
           check /health
           check /v1/health
+
+  preview-cleanup:
+    name: Borrar preview de la PR
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Borrar la preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIEW_NAME: pr-${{ github.event.pull_request.number }}
+        run: node deploy/delete-worker-preview.mjs

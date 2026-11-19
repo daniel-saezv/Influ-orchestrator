@@ -186,7 +186,7 @@ export async function decideEncargo(repo, { email, encargoId, body, now, r2 }) {
   if (!started.changed) throw err('CONFLICT', 'Este encargo no admite cambios', 409);
   if (encargo.batch_id) await repo.invalidateBatchForChanges({ batchId: encargo.batch_id, now });
   const deleted = await deleteAssetObjects(repo, r2, started.rows, encargo.user_id);
-  return { encargo_id: encargo.encargo_id, status: 'queued', bytes_released: deleted.bytes };
+  return { encargo_id: encargo.encargo_id, kind: encargo.kind, status: 'queued', bytes_released: deleted.bytes };
 }
 
 export async function cancelEncargo(repo, { email, encargoId, now, r2 }) {
