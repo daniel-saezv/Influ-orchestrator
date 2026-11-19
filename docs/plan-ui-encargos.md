@@ -18,7 +18,7 @@ La persona dueña de la cuenta sustituye al influencer virtual. Entra en una web
 
 Publicar de inmediato o programar fecha y hora ocurre después de aprobar. La hora sale de la huella del lote (apartado de API).
 
-La UI vive en el mismo Worker, como assets estáticos, detrás del Cloudflare Access que ya protege la API. El navegador no guarda secretos HMAC. El encargo se escribe en D1. El bot de Grok que ya genera con Grok Imagine consulta la cola por su cuenta, con `bot/influ.mjs`, y solo llama a Imagine cuando hay un encargo reclamado. El Worker no llama a Grok.
+La UI vive en el mismo Worker, como assets estáticos, detrás del Cloudflare Access que ya protege la API. El navegador no guarda secretos HMAC. El encargo se escribe en D1. Al crearlo, el Worker avisa al Grok Bot Influ por webhook (fase H2); el bot usa un conector MCP remoto en el mismo Worker y la herramienta nativa Grok Imagine para generar solo cuando hay trabajo reclamado. `bot/influ.mjs` queda para pruebas y CI sobre las mismas rutas HMAC. El Worker no llama a Grok Imagine ni expone claves de API de Grok.
 
 El vídeo nuevo va a R2 Standard, con topes por usuario y globales por debajo del cupo gratuito. KV deja de usarse para ese vídeo. Lo que no quepa en el tope se rechaza.
 
@@ -29,7 +29,7 @@ Publica el Worker, en el cron que ya existe, nunca el bot. En MOCK no hay tokens
 Quedan cerradas. El resto del documento ya las aplica.
 
 1. Varias cuentas de creador por usuario de Access, con selector desde el primer uso. Aislamiento por el correo del JWT en cada endpoint.
-2. El bot consulta la cola solo. Una consulta vacía no llama a Imagine ni añade otro producto de pago.
+2. Influ no sondea la cola: despierta con el webhook del Worker (H2). La revisión de respaldo es poco frecuente (por ejemplo diaria). Imagine solo corre con un encargo ya reclamado.
 3. R2 Standard, con topes que no llegan al cupo gratuito. Sin Infrequent Access. El usuario completa el alta.
 4. Subida directa hasta 5 MiB. A partir de ahí, partes de 5 MiB. Archivo máximo 150 MB. El origen se conserva para poder regenerar y se borra al cerrar o cancelar el encargo. La pieza descartada se borra en ese momento con `DeleteObject`.
 5. Con la PWA instalada, el icono abre la web app. Sin instalar, se usa Safari. La prueba de Access dentro de la PWA del iPhone es obligatoria.
@@ -55,7 +55,7 @@ Quedan cerradas. El resto del documento ya las aplica.
 | shadcn/ui, React, Tailwind | Código copiado al repo | Sin cuenta. `components.json` se crea en la fase de UI, dentro de `ui/`. Hasta entonces no existe, como dice `AGENTS.md`. | Nada que pagar. |
 | PWA | El sistema | Manifiesto y «Añadir a pantalla de inicio». [Apple](https://support.apple.com/guide/iphone/open-as-web-app-iphea86e5236/ios) | Sin tienda y sin cuota. |
 | Revisión de las apps de redes | Proceso de cada plataforma | YouTube: formulario de auditoría, sin precio en la página. [Auditoría](https://developers.google.com/youtube/v3/guides/quota_and_compliance_audits). Meta: App Review desde el panel, sin precio en la introducción. [App Review](https://developers.facebook.com/docs/resp-plat-initiatives/app-review/introduction/). TikTok: la revisión pide una demo gratuita para el revisor y no publica una tarifa. [Guía del desarrollador](https://developers.tiktok.com/doc/our-guidelines-developer-guidelines). | Fuera del MVP (sigue MOCK). No se contrata un trámite de pago. Si una página pasara a listar un precio, se para y se pregunta. |
-| Grok / Grok Imagine | Suscripción que ya tienes | Generar sí. Consultar una cola vacía no. | El Worker no añade una clave de API de Grok. |
+| Grok / Grok Imagine | Suscripción que ya tienes | Generar sí, con encargo reclamado vía MCP (H2). Influ no sondea la cola. | El Worker no añade una clave de API de Grok. |
 
 Cloudflare redondea al alza la unidad facturable: 1,1 GB-mes se facturan como 2 GB-mes, y 1.000.001 operaciones como 2 millones. [Precios de R2](https://developers.cloudflare.com/r2/pricing/). Por eso los topes dejan margen y no se apoyan en «usar justo 10 GB».
 
@@ -149,7 +149,7 @@ La guía y el nombre salen solo la primera vez. Después, Access lleva al select
 
 **3. «¿Dónde lo publicamos?»** YouTube, Instagram y TikTok. Las tres tienen simulador en el MVP. Controles grandes y «Seguir».
 
-**4. «Lo estoy preparando.»** Sin decisión. Se puede cerrar el teléfono. El bot recoge la cola solo.
+**4. «Lo estoy preparando.»** Sin decisión. Se puede cerrar el teléfono. Influ se despierta con el webhook al crear el encargo.
 
 **5. Previa 9:16.** `playsinline`, silencio hasta que se toca el vídeo. Abajo, «¡Me gusta!» y «Cambiar algo». La línea «Hecho con ayuda de IA» sale solo si el resultado viene marcado como generado o alterado.
 
@@ -225,18 +225,22 @@ flowchart LR
     access[Access]
     ui[Assets]
     w[Worker]
+    mcp[MCP remoto H2]
     d1[(D1)]
     r2[(R2 Standard)]
     cron[Cron 15 min]
   end
-  bot[Bot Grok de la suscripcion]
+  bot[Influ Grok Bot]
   phone --> access
   access --> ui
   access --> w
   w --> d1
   w --> r2
+  w --> mcp
   cron --> w
-  bot -->|consulta la cola HMAC| access
+  w -->|webhook firmado al crear encargo| bot
+  bot -->|conector MCP auth propio| mcp
+  mcp -->|mismas rutas HMAC internas| w
 ```
 
 | Paso | Dónde | Qué ocurre |
@@ -244,7 +248,7 @@ flowchart LR
 | Alojo | Assets del mismo Worker | Un origen, una aplicación Access. |
 | Cuentas | D1, filtradas por el correo del JWT | El selector solo lista las de ese correo. |
 | Encargo | `POST` con el JWT | `queued`, con `account_id`. |
-| El bot lo ve | El propio bot llama al CLI | `GET /v1/encargos?status=queued`. Cola vacía: no hay Imagine. Con encargo: lo reclama, genera y devuelve la pieza por el CLI. El Worker no llama a Grok. |
+| Influ lo procesa | Webhook H2 y conector MCP | Al `POST /v1/me/encargos`, el Worker llama al webhook de la rutina Influ (secreto del Worker, petición firmada). Influ reclama vía MCP, genera con Grok Imagine y sube el resultado. Si el webhook falla, el encargo sigue en cola. `bot/influ.mjs` reproduce el flujo en pruebas y CI. |
 | Previa | `GET` de la pieza en R2 | Cuenta como clase B y solo si el SHA es de una cuenta de ese correo. |
 | Aprobar | JWT del dueño | Versión y huella, como WF-02. |
 | Publicar | Cron del Worker, MOCK | YouTube, Instagram o TikTok simulados. El bot no publica. |
@@ -309,7 +313,28 @@ HMAC `bot`. El bot no recibe refresh tokens ni el listado de cuentas.
 | `POST /v1/encargos/:id/claim` | Reserva. |
 | `POST /v1/encargos/:id/result` | Ata el lote y `synthetic`. El bot ya ha comparado el `head` de R2 y ha recalculado el SHA-256 del archivo. |
 
-El bucle del bot es el de la suscripción actual: pregunta a este Worker; si la cola está vacía, termina esa vuelta sin Imagine; si hay encargo, genera y responde. No se añade una API de Grok en el Worker ni otro plan.
+En producción (H2), Influ opera con el conector MCP del Worker, no con `bot/influ.mjs`. La generación la hace Influ con su herramienta Grok Imagine; `INFLU_GROK_GENERATE_COMMAND` deja de ser el camino principal (solo respaldo local en el CLI para CI).
+
+### MCP del bot (fase H2)
+
+Servidor MCP remoto en el mismo Worker ([Cloudflare Agents SDK](https://developers.cloudflare.com/agents/)), encima de las rutas de «API del bot». El Grok Bot Influ lo registra como conector personalizado.
+
+| Herramienta MCP | Equivale a |
+|---|---|
+| Reclamar encargo | `POST /v1/encargos/:id/claim` |
+| Leer origen del encargo | Lectura de assets R2 del encargo reclamado |
+| Subir pieza o resultado | `POST /v1/encargos/:id/result` |
+| Revisar estado | Consulta de estado del encargo (y cola si hace falta en la revisión de respaldo) |
+
+No hay herramienta de aprobar: la aprobación sigue siendo solo de la persona, por la UI con su JWT de Access.
+
+Autenticación propia del MCP (OAuth del conector o token dedicado), nunca abierta al público. Los secretos viven solo en el Worker (`wrangler secret put`). El teléfono y el navegador no reciben credenciales del conector.
+
+### Webhook hacia Influ (fase H2)
+
+Al crear un encargo (`POST /v1/me/encargos`), el Worker hace una subpetición `fetch` al webhook de la rutina de Influ. La URL es un secreto del Worker; la llamada va firmada o con secreto compartido. Así Influ solo despierta cuando hay trabajo nuevo.
+
+Un fallo del webhook no bloquea el encargo: queda en cola en D1. Influ lleva una revisión de respaldo poco frecuente (por ejemplo diaria) por si se pierde un aviso.
 
 `POST /v1/batches` sigue rechazando `mode`, `live` y `approved*`. El cron no aprueba.
 
@@ -320,7 +345,7 @@ El bucle del bot es el de la suscripción actual: pregunta a este Worker; si la 
 3. `users.email` es la única clave de propiedad. Las cuentas, encargos, sesiones, piezas y (en el futuro) conexiones cuelgan de ese usuario por clave ajena.
 4. Todo `SELECT`/`UPDATE`/`DELETE` de la UI incluye ese `user_id`. Probar el id de otro correo devuelve 404.
 5. Conectar una red, el día que exista, exige el OAuth de esa red hecho por quien está en esta sesión de Access. El token se guarda en una cuenta de ese correo. No hay enlace para «prestar» una cuenta, ni un endpoint que acepte un `account_id` ajeno. Quien tenga las credenciales de la red puede repetir el OAuth en su propio usuario; eso no le deja ver los encargos del otro.
-6. El bot HMAC no es un usuario. Ve un encargo reclamado y sus objetos, y queda en `audit_log` con el `account_id`. No lista usuarios ni lee `platform_connections`.
+6. El bot HMAC y el MCP no son usuarios. Ven un encargo reclamado y sus objetos, y queda en `audit_log` con el `account_id`. No listan usuarios ni leen `platform_connections`. El MCP no expone aprobar ni rutas de la persona.
 7. El cron carga la publicación por su id interno. No acepta un correo ni un account id venidos de fuera.
 
 Pruebas de aceptación: dos correos; el segundo pide el encargo, la pieza, la racha, la actividad y la conexión del primero y recibe 404 en todas. Un service token no abre `/v1/me`.
@@ -359,7 +384,8 @@ Límites que ya están escritos y no cambian con esta elección: YouTube, 100 `v
 - 404 entre correos, en cada endpoint, con prueba de dos usuarios.
 - R2: reserva en D1 antes de la llamada; Standard; sin listar el bucket.
 - Hash: lo calcula el teléfono, lo comprueba R2 en el `put`, lo repite el bot y el cron lo contrasta con `head` antes de publicar. El Worker no lo calcula y ata la sesión al `user_id`.
-- Nonce anti-replay en las rutas HMAC.
+- Nonce anti-replay en las rutas HMAC. El endpoint MCP exige la autenticación propia de H2; no es anónimo.
+- Webhook de Influ: URL y material de firma solo como secretos del Worker; un fallo de entrega no cancela el encargo.
 - La UI no puede enviar `mode`, `live` ni `publisher_mode`. El guard de CI sigue exigiendo MOCK.
 - `localStorage` solo guarda el id de la subida a medias, en ese origen.
 
@@ -373,13 +399,14 @@ Este documento es la fase 0. Cada fase siguiente va en su PR, con pruebas. Un so
 | A | Usuarios, varias cuentas, encargos, 404 por correo, rate limit por persona, actividad y racha en la zona guardada. Sin UI. | `migrations/0004_encargos.sql`, repositorio D1, workflows de encargos, `src/worker.js`, `tests/` | B, C y D |
 | B | UI mobile-first, guía, nombre editable, selector, tres plataformas, aviso de IA según `synthetic`. API fingida. `components.json` dentro de `ui/`. Actualizar `AGENTS.md`. | `ui/**`, `AGENTS.md` | A, C, D |
 | C | Simuladores MOCK de Instagram y TikTok, sin red. Obligatorios para el MVP. | `src/adapters/publishers/instagram/**`, `tiktok/**`, `registry.js`, `tests/unit/` | A, B, D |
-| D | El bot pregunta la cola, reclama y devuelve `synthetic` y el lote. Cola vacía sin Imagine. | `bot/**` | A, B, C |
+| D | POC del CLI: cola HMAC, reclamar y devolver `synthetic` (sustituido en producción por H2). | `bot/**` | A, B, C |
 | E | Hora fuera de la huella y programación. | `hash.js`, `wf02`, `wf03`, pruebas de dominio | Después de A |
 | F | R2 Standard: cada parte un `put` con `sha256` comprobado por R2, tope 150 MB, contadores de 30 días, borrado inmediato y ciclo de vida solo para huérfanos, sin Infrequent Access. El usuario ha completado el alta antes de desplegar el binding. | Adaptador R2, `src/worker.js`, pruebas de tope, checksum y borrado | Después de A. No a la vez que E |
 | G | Hecha. UI real en los assets del Worker, manifiesto PWA (sin service worker) y CI de la UI. [PR 24](https://github.com/daniel-saezv/Influ-orchestrator/pull/24), fusionada en `886b8c7`. | `ui/**`, `wrangler.toml` | Después de A, B, C y F |
-| H | Rutas HMAC del bot, las de «API del bot»: `GET /v1/encargos?status=queued`, `POST /v1/encargos/:id/claim` y `POST /v1/encargos/:id/result`. Autenticación HMAC `bot`, `head` de R2 y SHA-256 según «Integridad», flag `synthetic` y `audit_log`. Adaptar el bucle de `bot/influ.mjs`: cola vacía, sin Imagine. Solo backend; puede ir en paralelo con el diseño visual (fase I). | `src/worker.js`, `bot/influ.mjs`, `tests/` | Después de A y F. En paralelo con I |
-| I | Diseño visual de la UI. Identidad propia (paleta, color de acento, modo oscuro, tipografía con carácter y fondos con profundidad), animaciones que respetan `prefers-reduced-motion`, y componentes shadcn añadidos o rediseñados con el MCP de shadcn y la skill de `.agents/skills/shadcn`. Sin cambios de backend ni de API. Las pruebas de la UI quedan en verde. El usuario valida el aspecto en la preview de la PR antes de fusionar. | `ui/**` | Después de G. En paralelo con H |
-| J | iPhone: Safari, icono, Access dentro de la PWA, cámara, galería, audio, reanudación, previa 9:16, selector de cuentas. | Ajustes de `ui/` si la prueba lo pide | Después de I |
+| H | Rutas HMAC del bot («API del bot»): `GET /v1/encargos?status=queued`, `POST /v1/encargos/:id/claim` y `POST /v1/encargos/:id/result`. HMAC `bot`, integridad R2, `synthetic`, `audit_log`. `bot/influ.mjs` como herramienta de pruebas y CI sobre esas rutas (cola vacía sin Imagine). Solo backend. | `src/worker.js`, `bot/influ.mjs`, `tests/` | Después de A y F. En paralelo con I y H2 |
+| H2 | MCP remoto (Agents SDK) sobre las mismas rutas; herramientas reclamar, leer origen, subir resultado y revisar estado; sin aprobar. Auth propia del conector. Webhook al crear encargo hacia la rutina Influ (secreto del Worker, fallo no bloquea cola); revisión de respaldo poco frecuente. Influ genera con Grok Imagine; `INFLU_GROK_GENERATE_COMMAND` deja de ser el camino principal. | `src/worker.js`, Agents SDK, secretos webhook/MCP, `tests/` | Después de H. En paralelo con I |
+| I | Diseño visual de la UI. Identidad propia (paleta, acento, modo oscuro, tipografía, fondos con profundidad), animaciones con `prefers-reduced-motion`, componentes shadcn vía MCP de shadcn y `.agents/skills/shadcn`. Sin backend. Pruebas UI en verde; el usuario valida en la preview de la PR. | `ui/**` | Después de G. En paralelo con H y H2 |
+| J | iPhone: Safari, icono, Access dentro de la PWA, cámara, galería, audio, reanudación, previa 9:16, selector de cuentas. | Ajustes de `ui/` si la prueba lo pide | Después de I (y de H2 para flujo real con webhook) |
 | K | Service worker de la PWA: caché del shell y de los datos para usarla sin red o con mala cobertura, y notificaciones push en iPhone (hace falta la app en la pantalla de inicio). Pendiente, opcional y aplazable. | `ui/**` | Después de J. Se puede ir atrasando indefinidamente. |
 
 OAuth, tokens y adaptadores LIVE no están en estas fases. La tabla `platform_connections` se crea vacía en A para no migrar dos veces.
@@ -388,9 +415,13 @@ La fase F prueba, además del tope y del checksum: `changes` borra la pieza desc
 
 La fase G está hecha. La [PR 24](https://github.com/daniel-saezv/Influ-orchestrator/pull/24) se fusionó en `886b8c7`: la UI real se sirve como assets del Worker, con el manifiesto PWA y sin service worker, y la CI construye y valida `ui/`.
 
-La fase H implementa en el Worker la API ya descrita en «API del bot», con firma HMAC `bot`. En `result` se aplican las comprobaciones de «Integridad» (`head` de R2 y SHA-256), se fija `synthetic` y queda constancia en `audit_log`. El bucle de `bot/influ.mjs` usa esas rutas: si la cola está vacía, termina esa vuelta sin Imagine. Es solo backend y puede ir a la vez que la fase I.
+La fase H implementa en el Worker la API de «API del bot», con HMAC `bot`, integridad en `result`, `synthetic` y `audit_log`, con pruebas unitarias y de aceptación. `bot/influ.mjs` queda como herramienta de pruebas y de CI sobre esas rutas (no es el camino de producción tras H2). Puede ir en paralelo con I y con la preparación de H2.
 
-La fase I cambia el aspecto de la UI que entregó G. Esa interfaz es demasiado blanca y básica. Tiene que seguir siendo minimalista y ganar estilo, gracia y elegancia. El alcance es solo de presentación, en `ui/`. La identidad visual es propia: paleta, color de acento, modo oscuro, tipografía con carácter y fondos con profundidad, como degradados suaves o un efecto cristal, en vez de un blanco plano. Las animaciones incluyen las transiciones entre vistas, la entrada escalonada de las listas, la respuesta visual al pulsar y los esqueletos de carga, y respetan `prefers-reduced-motion`. Se añaden o se rediseñan componentes shadcn con el MCP de shadcn y la skill de `.agents/skills/shadcn`. No hay cambios de backend ni de API, y las pruebas de la UI tienen que quedar en verde. Puede ir en paralelo con H. Criterio de aceptación: el usuario valida el aspecto en la preview de la PR antes de fusionar.
+La fase H2 añade el servidor MCP remoto (Agents SDK) y el webhook al crear encargo, según las subsecciones «MCP del bot» y «Webhook hacia Influ». Influ conecta el Worker como conector personalizado, usa las herramientas MCP en lugar del script y genera con Grok Imagine integrado en Grok. La revisión de respaldo cubre avisos perdidos. Todo sigue en MOCK.
+
+La fase I cambia el aspecto de la UI que entregó G: minimalista, con identidad propia y animaciones que respetan `prefers-reduced-motion`. Solo `ui/`. Puede ir en paralelo con H y H2. Criterio de aceptación: el usuario valida el aspecto en la preview de la PR antes de fusionar.
+
+La fase J valida en iPhone el flujo completo, incluido el despertar de Influ vía webhook tras H2.
 
 La fase K es la última y queda pendiente: es opcional y se puede ir atrasando indefinidamente. Añade un service worker a la PWA para dos cosas: usar la interfaz sin conexión o con mala red, guardando en caché el shell de la UI y los datos; y enviar notificaciones push en iPhone (hace falta tener la PWA instalada en la pantalla de inicio y un service worker), por ejemplo avisos de encargos. El riesgo a tratar es servir versiones antiguas de la UI desde la caché, así que hace falta una estrategia de versionado y actualización. Por eso se dejó fuera del MVP y de la fase G.
 
@@ -413,7 +444,7 @@ En cuanto Cloudflare permita límites de gasto nativos para R2, hay que revisar 
 1. **R2 factura si alguien se salta el tope.** El redondeo convierte un GB o una operación de más en la unidad siguiente. La reserva en D1 es la barrera; el ciclo de vida solo recoge huérfanos y puede tardar unas 24 h. El alta lleva método de pago: lo pone el usuario, y un fallo del contador sí podría generar importe. Por eso el tope global es 6 GB y 800.000 operaciones de clase A, no el cupo oficial entero.
 2. **CPU de 10 ms.** Hashear 5 MiB en el Worker, aunque sea con `DigestStream`, puede devolver 1102. El hash lo calculan el teléfono y el bot; R2 solo compara el que se le pasa. Si el mero paso del cuerpo a R2 también se pasa de 10 ms, se baja el tamaño de la parte: al no usar multipart, 5 MiB ya no es un mínimo de R2.
 3. **Un generador para todos.** La cola es una. Dos encargos esperan turno. La pantalla lo dice. No se contrata otro bot.
-4. **El bucle del bot tiene que ser el de la suscripción actual.** Consultar el Worker es una petición HMAC, gratis dentro del cupo del Worker. Imagine solo corre con un encargo reclamado. Si despertar ese bucle pasara a cobrarse fuera de la suscripción, habría que parar: no entra en este plan.
+4. **Webhook y MCP dentro del cupo del Worker.** El aviso a Influ y las herramientas MCP son subpeticiones del Worker. Imagine solo corre en Grok, con encargo reclamado. Si despertar la rutina de Influ pasara a cobrarse fuera de la suscripción, hay que parar: no entra en este plan.
 5. **Access, 50 asientos.** El 51 no entra.
 6. **La PWA no comparte cookies con Safari.** La fase J tiene que demostrar el login de Access desde el icono. Si el salto a `cloudflareaccess.com` abre Safari, se corrige ahí.
 7. **iOS mata la subida.** Hay que volver a elegir el mismo archivo. El texto de la pantalla lo dice.
