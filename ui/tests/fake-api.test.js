@@ -70,6 +70,7 @@ describe('fake Phase B API', () => {
     const snapshot = getFakeApiState()
     const other = snapshot.accounts.find((account) => account.owner_email === 'otra-persona@example.test')
     expect((await fakeApi.getEncargo('enc-other')).status).toBe(404)
+    expect((await fakeApi.listEncargos()).data.encargos.map((item) => item.id)).not.toContain('enc-other')
     expect((await fakeApi.getMedia('media-other')).status).toBe(404)
     expect((await fakeApi.getStreak(other.id)).status).toBe(404)
     expect((await fakeApi.getActivity(other.id)).status).toBe(404)
@@ -110,6 +111,15 @@ describe('fake Phase B API', () => {
     const ready = (await fakeApi.getEncargo(created.data.id)).data
     expect(ready.status).toBe('ready')
     expect(ready.preview.width / ready.preview.height).toBe(9 / 16)
+    const listed = await fakeApi.listEncargos()
+    expect(listed.data.encargos).toEqual([
+      expect.objectContaining({
+        id: created.data.id,
+        status: 'ready',
+        updated_at: expect.any(String),
+        created_at: expect.any(String),
+      }),
+    ])
   })
 
   it('only shows an IA notice for synthetic preview data', async () => {

@@ -43,6 +43,9 @@ function publicEncargo(row, assets = []) {
     synthetic: row.synthetic,
     publish_at: row.publish_at,
     batch_id: row.batch_id,
+    account_name: row.account_name ?? null,
+    created_at: row.created_at ?? null,
+    updated_at: row.updated_at ?? null,
     preview: deliverable ? {
       sha256: deliverable.sha256,
       mime: deliverable.mime,
@@ -122,6 +125,12 @@ export async function createEncargo(repo, { email, body, now }) {
   const status = kind === 'from_scratch' ? 'queued' : 'draft';
   const encargoId = await repo.insertEncargo({ accountId: account.account_id, kind, note, status, platforms, now });
   return { encargo_id: encargoId, account_id: account.account_id, kind, status };
+}
+
+export async function listEncargos(repo, { email, now }) {
+  await repo.ensureUser(email, now);
+  const rows = await repo.listEncargosForEmail(email);
+  return { encargos: rows.map((row) => publicEncargo(row)) };
 }
 
 export async function getEncargo(repo, { email, encargoId }) {
@@ -471,6 +480,7 @@ const PERSON_ROUTES = [
   ['POST', /^\/v1\/me\/accounts$/, (repo, { email, body, now }) => createAccount(repo, { email, body, now })],
   ['PATCH', /^\/v1\/me\/accounts\/([^/]+)$/, (repo, { email, body, now }, m) => renameAccount(repo, { email, accountId: m[1], body, now })],
   ['POST', /^\/v1\/me\/encargos$/, (repo, ctx) => createEncargo(repo, ctx)],
+  ['GET', /^\/v1\/me\/encargos$/, (repo, { email, now }) => listEncargos(repo, { email, now })],
   ['GET', /^\/v1\/me\/encargos\/([^/]+)$/, (repo, { email }, m) => getEncargo(repo, { email, encargoId: m[1] })],
   ['POST', /^\/v1\/me\/uploads$/, (repo, ctx) => createUpload(repo, ctx)],
   ['POST', /^\/v1\/me\/uploads\/([^/]+)\/complete$/, (repo, ctx, m) => completeUpload(repo, { ...ctx, uploadId: m[1] })],

@@ -374,7 +374,19 @@ if (target === 'local') {
     const denied = await call('GET', '/v1/me', service);
     eq(denied.status, 403, 'service token');
     eq(denied.error.code, 'ACCESS_DENIED', 'código');
-    log.push('bob recibe 404 en encargo, pieza, racha, actividad y conexión; service token 403 en /v1/me; conexiones propias vacías');
+    const bobEncargos = await call('GET', '/v1/me/encargos', token('bob@example.com'));
+    eq(bobEncargos.status, 200, 'lista de bob');
+    eq(bobEncargos.data.encargos.length, 0, 'bob no ve encargos ajenos');
+    const anaEncargos = await call('GET', '/v1/me/encargos', token('ana@example.com'));
+    eq(anaEncargos.status, 200, 'lista de ana');
+    eq(anaEncargos.data.encargos.length, 1, 'ana ve el suyo');
+    eq(anaEncargos.data.encargos[0].encargo_id, encargo.data.encargo_id, 'id');
+    eq(anaEncargos.data.encargos[0].status, 'ready', 'estado del servidor');
+    eq(Boolean(anaEncargos.data.encargos[0].updated_at), true, 'fecha');
+    const deniedList = await call('GET', '/v1/me/encargos', service);
+    eq(deniedList.status, 403, 'service token en la lista');
+    eq(deniedList.error.code, 'ACCESS_DENIED', 'código lista');
+    log.push('bob recibe 404 en encargo, pieza, racha, actividad y conexión; su lista queda vacía y la de ana trae el estado; service token 403 en /v1/me');
   });
 
   await T('EXTRA S5', 'Bot HMAC: firma inválida, reclamo doble y hash que no cuadra', async (log) => {
