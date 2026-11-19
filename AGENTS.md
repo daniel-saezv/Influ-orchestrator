@@ -36,7 +36,7 @@ Comprobados en este clon el 2026-11-19 (Node v22.23.4, npm 10.9.9):
 
 - Instalación: `npm ci` (125 paquetes auditados, 0 vulnerabilidades). Deja Wrangler 4.164.0.
 - Build: `cd ui && npm run build` genera `ui/dist`; después `npm run deploy:dry-run` ejecuta `wrangler deploy --dry-run` y empaqueta Worker y assets. `npm run build:deploy` sin argumentos solo imprime el uso del generador legacy (`worker|migrate|secrets`); no es el despliegue canónico.
-- Tests: `npm run test:unit` (73 pruebas, 0 fallos) y `npm run test:acceptance -- --target local` (19/19 OK, en memoria). `npm run deploy:guard` exige `PUBLISHER_MODE=mock` y `LIVE_ENABLED_IN_BUILD=false`.
+- Tests: `npm run test:unit` (91 pruebas, 0 fallos) y `npm run test:acceptance -- --target local` (19/19 OK, en memoria). `npm run deploy:guard` exige `PUBLISHER_MODE=mock` y `LIVE_ENABLED_IN_BUILD=false`.
 - UI: `cd ui && npm ci && npm run dev` arranca Vite. La validación aislada es `cd ui && npm run lint && npm run test:run && npm run build`. Ese build es obligatorio antes de empaquetar, previsualizar o desplegar el Worker.
 - Arranque: no hay `npm start`. El proceso que sirve la API es el Worker desplegado en Cloudflare (`docs/despliegue-ci.md`). En local, el sustituto que sí arranca la API es la aceptación: `npm run test:acceptance -- --target local`. `npx wrangler dev --local --port 8787` no llega a escuchar: workerd rechaza el export `SERVICE_VERSION` (`Incorrect type for map entry 'SERVICE_VERSION'`). No está corregido. `node bot/influ.mjs` sin entorno termina con código 2 y pide `INFLU_BASE_URL`, `INFLU_BOT_HMAC_SECRET` e `INFLU_APPROVER_HMAC_SECRET`.
 
@@ -151,4 +151,4 @@ Secretos que hay que añadir en Cursor solo si el agente debe desplegar o hablar
 - `INFLU_BOT_HMAC_SECRET`
 - `INFLU_APPROVER_HMAC_SECRET`
 
-Los HMAC del Worker (`BOT_HMAC_SECRET`, `APPROVER_HMAC_SECRET`), el bearer del conector (`MCP_BEARER_TOKEN`), `ACCESS_MCP_AUD`, `MCP_SERVICE_TOKEN_CLIENT_ID` y el webhook de la rutina (`INFLU_WEBHOOK_URL`, `INFLU_WEBHOOK_SECRET`) viven en Cloudflare, no en Cursor. Permisos del token: [docs/despliegue-ci.md](docs/despliegue-ci.md).
+Los HMAC del Worker (`BOT_HMAC_SECRET`, `APPROVER_HMAC_SECRET`), el bearer del conector (`MCP_BEARER_TOKEN`), `ACCESS_MCP_AUD`, `MCP_SERVICE_TOKEN_CLIENT_ID`, el webhook de la rutina (`INFLU_WEBHOOK_URL`, `INFLU_WEBHOOK_SECRET`) y el token R2 de firma (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`) viven en Cloudflare, no en Cursor. `R2_ACCOUNT_ID` y `R2_BUCKET_NAME` van en `wrangler.toml`. Permisos del token: [docs/despliegue-ci.md](docs/despliegue-ci.md).

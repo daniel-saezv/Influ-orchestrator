@@ -221,13 +221,15 @@ export async function getMediaResponse(ctx, { email, sha256, now }) {
     await ctx.repo.releaseDaily(user.user_id, 'b', now);
     throw err('R2_UNAVAILABLE', 'No se pudo leer el archivo', 503);
   }
-  if (!object || object.sha256 !== hash) throw err('INTEGRITY_ERROR', 'El objeto almacenado no coincide', 500);
+  const shaMatches = Boolean(object?.sha256) && object.sha256 === hash;
+  const md5Matches = Boolean(object) && !object.sha256 && Boolean(asset.content_md5) && object.md5 === asset.content_md5;
+  if (!object || (!shaMatches && !md5Matches)) throw err('INTEGRITY_ERROR', 'El objeto almacenado no coincide', 500);
   return new Response(object.body, {
     status: 200,
     headers: {
       'content-type': asset.mime || object.mime || 'application/octet-stream',
       'content-length': String(object.size),
-      'x-content-sha256': object.sha256,
+      'x-content-sha256': object.sha256 || asset.sha256,
       'cache-control': 'private, no-store',
       'x-influ-mode': 'mock',
     },

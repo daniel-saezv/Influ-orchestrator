@@ -162,6 +162,11 @@ test('MCP con bearer: herramientas de la cola y ninguna de aprobar o publicar', 
   }
   const described = tools.map((tool) => `${tool.name} ${tool.description ?? ''}`).join('\n');
   for (const word of ['aprobar', 'publicar']) assert.equal(described.includes(word), false, described);
+  for (const name of ['leer_origen', 'preparar_subida']) {
+    const tool = tools.find((item) => item.name === name);
+    assert.match(tool.description, /secreto de corta vida/);
+    assert.match(tool.description, /logs/);
+  }
 
   for (const name of ['aprobar', 'publicar', 'approve_batch', 'decidir_encargo']) {
     const call = await rpc(dbEnv, MCP_TOKEN, 'tools/call', { name, arguments: { encargo_id: encargoId } });
@@ -177,6 +182,20 @@ test('MCP con bearer: herramientas de la cola y ninguna de aprobar o publicar', 
   const claimText = claim.messages.flatMap((message) => message.result?.content ?? []).map((part) => part.text).join('');
   assert.equal(JSON.parse(claimText).status, 'claimed');
 
+  const hash = 'ab'.repeat(32);
+  const missingSign = await rpc(dbEnv, MCP_TOKEN, 'tools/call', {
+    name: 'preparar_subida',
+    arguments: {
+      encargo_id: encargoId, sha256: hash, content_md5: '1B2M2Y8AsgTpgAmY7PhCfg==', mime: 'video/mp4', size_bytes: 8,
+    },
+  });
+  const missingText = missingSign.messages.flatMap((message) => message.result?.content ?? []).map((part) => part.text).join('');
+  const missingBody = JSON.parse(missingText);
+  assert.equal(missingSign.messages.some((message) => message.result?.isError), true);
+  assert.equal(missingBody.code, 'R2_SIGNING_UNAVAILABLE');
+  assert.match(missingBody.message, /R2_ACCESS_KEY_ID/);
+  assert.equal(missingText.includes('X-Amz-Signature'), false);
+
   const origin = await rpc(dbEnv, MCP_TOKEN, 'tools/call', {
     name: 'leer_origen',
     arguments: { encargo_id: encargoId },
@@ -186,7 +205,6 @@ test('MCP con bearer: herramientas de la cola y ninguna de aprobar o publicar', 
   assert.equal(originBody.assets.length, 0);
   assert.equal(JSON.stringify(originBody).includes('ana@example.com'), false);
 
-  const hash = 'ab'.repeat(32);
   const uploaded = await rpc(dbEnv, MCP_TOKEN, 'tools/call', {
     name: 'subir_resultado',
     arguments: { encargo_id: encargoId, synthetic: true, content_hash: hash },

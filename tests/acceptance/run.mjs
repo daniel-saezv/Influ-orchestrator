@@ -353,7 +353,6 @@ if (target === 'local') {
     assert((await bot.call('POST', `/v1/encargos/${encargo.data.encargo_id}/claim`)).ok, 'claim');
     const ready = await bot.call('POST', `/v1/encargos/${encargo.data.encargo_id}/result`, { body: {
       synthetic: true, content_hash: 'ab'.repeat(32),
-      deliverable: { r2_key: 'out/pieza', sha256: sha, mime: 'video/mp4', size_bytes: 10 },
     } });
     assert(ready.ok, JSON.stringify(ready.error));
     await call('POST', '/v1/me', token('bob@example.com'), { display_name: 'Bob', time_zone: 'Europe/Madrid' });
@@ -552,7 +551,7 @@ if (target === 'local') {
     assert(!closed.text.includes('tools'), 'no ejecuta el conector');
     const listed = await mcp(baseEnv, tokenMcp, 'tools/list');
     eq(listed.status, 200, 'tools/list');
-    for (const name of ['reclamar_encargo', 'leer_origen', 'subir_resultado', 'revisar_estado']) {
+    for (const name of ['reclamar_encargo', 'leer_origen', 'preparar_subida', 'subir_resultado', 'revisar_estado']) {
       assert(listed.text.includes(`"name":"${name}"`), name);
     }
     for (const name of ['aprobar', 'publicar', 'approve', 'publish']) {

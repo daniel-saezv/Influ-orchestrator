@@ -9,11 +9,11 @@ La aprobación no está en el conector. La persona aprueba en la UI con su JWT d
 | Pieza | Dónde |
 |---|---|
 | Servidor MCP | `POST /mcp` en el mismo Worker. [Agents SDK](https://developers.cloudflare.com/agents/model-context-protocol/apis/handler-api/), `createMcpHandler` de `agents/mcp/server`. No usa Durable Object: cada petición crea el servidor, y el estado sigue en D1 y R2. Cabe en el plan gratuito. |
-| Herramientas | `reclamar_encargo`, `leer_origen`, `subir_resultado`, `revisar_estado`. Hacen lo mismo que la API HMAC del bot. |
+| Herramientas | `reclamar_encargo`, `leer_origen`, `preparar_subida`, `subir_resultado`, `revisar_estado`. No hay herramienta de aprobar ni de publicar. |
 | Webhook | Al crear un encargo que queda `queued`, un `POST` a `INFLU_WEBHOOK_URL`. |
 | Respaldo | El cron `*/15` que ya existe mira la cola una vez por día UTC. Si hay encargos `queued` sin reclamar, lo escribe en el log. No reclama, no llama a Grok y no publica. |
 
-`leer_origen` devuelve la nota y el `head` de cada objeto R2 de origen (clave, SHA-256, tamaño). No copia el vídeo: en el plan gratuito el Worker tiene 10 ms de CPU y no da para mover el archivo. La huella la vuelve a comprobar `subir_resultado`, igual que `POST /v1/encargos/:id/result`.
+`leer_origen` sigue exigiendo un encargo `claimed`. Devuelve la nota y, por cada origen, la clave, el SHA-256, el tamaño y una URL de GET prefirmada que caduca a los 10 minutos. No devuelve bytes: el bot descarga con `curl` y compara el SHA-256. Cada GET emitido cuenta una clase B, además del head del origen. `preparar_subida` elige la clave `out/{encargo_id}/{version}/{id}`, guarda la reserva y devuelve un PUT prefirmado (10 minutos) con `Content-Type`, `Content-Length`, `Content-MD5` e `If-None-Match: *`. Esas URLs son un secreto de corta vida: no se muestran en el chat ni se escriben en logs. La firma se calcula en el Worker con `aws4fetch` y no abre la guardia de salida. `subir_resultado` solo acepta la clave de esa reserva, tras un `head` cuyo tamaño y `checksums.md5` coinciden. Si faltan `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID` o `R2_BUCKET_NAME`, esas dos herramientas responden `R2_SIGNING_UNAVAILABLE` y el resto del Worker sigue.
 
 `bot/influ.mjs` sigue para pruebas y CI sobre las rutas HMAC. En producción, Influ usa el conector.
 
@@ -102,7 +102,7 @@ Si falta la URL o falta la clave, el Worker no llama a nadie y el encargo se cre
 
 Texto orientativo para la instrucción de la rutina, para pegarlo tú en el bot:
 
-> Cuando el cuerpo traiga `event` = `encargo.queued`, usa el conector Influ encargos. Reclama ese encargo, lee el origen y, solo entonces, genera con Grok Imagine. Sube el resultado con `synthetic` en true si has generado o alterado. No apruebes y no publiques. Si la herramienta dice que el encargo no está en la cola, termina sin generar.
+> Cuando el cuerpo traiga `event` = `encargo.queued`, usa el conector Influ encargos. Reclama ese encargo. Llama a `leer_origen`, descarga cada URL con `curl` y comprueba el SHA-256 antes de generar. Después llama a `preparar_subida`, sube el archivo con `curl -X PUT` y las cabeceras que devolvió la herramienta, y cierra con `subir_resultado` usando esa `r2_key`. `synthetic` en true si has generado o alterado. Las URLs son un secreto de corta vida: no las escribas en el chat ni en logs. No apruebes y no publiques. Si la herramienta dice que el encargo no está en la cola, termina sin generar.
 
 Un encargo `edit` nace en `draft` y no dispara el webhook: aún no está en la cola. Cuando pase a `queued`, la revisión del día siguiente lo verá si nadie lo ha reclamado.
 
@@ -119,6 +119,17 @@ Solo en el Worker (`wrangler secret put` o el panel). No van en `wrangler.toml`,
 | `MCP_BEARER_TOKEN` | Bearer del conector |
 | `INFLU_WEBHOOK_URL` | URL de la rutina |
 | `INFLU_WEBHOOK_SECRET` | Clave de esa rutina |
+| `R2_ACCESS_KEY_ID` | Access Key ID del token R2 Object Read & Write de un solo bucket |
+| `R2_SECRET_ACCESS_KEY` | Secret Access Key de ese token. No va en `[vars]` |
+
+`R2_ACCOUNT_ID` y `R2_BUCKET_NAME` no son secretos: van en `[vars]` (`influ-poc-media`) y en `[previews.vars]` (`influ-poc-media-preview`). El token de producción es solo de `influ-poc-media`. El de preview, solo de `influ-poc-media-preview`. No sirven el token de CI ni el service token de Access. La preview no hereda secretos:
+
+```sh
+npx wrangler secret put R2_ACCESS_KEY_ID
+npx wrangler secret put R2_SECRET_ACCESS_KEY
+npx wrangler preview base-config secret put R2_ACCESS_KEY_ID
+npx wrangler preview base-config secret put R2_SECRET_ACCESS_KEY
+```
 
 La preview de una PR no hereda los secretos de producción. Sin la config de Access de `/mcp`, la ruta responde 503. Con esa config y sin `MCP_BEARER_TOKEN`, responde 401. `/v1/health` no usa estos secretos.
 

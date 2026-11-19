@@ -3,10 +3,11 @@ import { err } from '../core/domain/errors.js';
 import { BATCH_ID_RE } from '../core/domain/batch.js';
 import { contentHash } from '../core/domain/hash.js';
 import {
-  assertAssetBytes, assertName, assertNoControlFields, assertPlatforms, assertSha256, assertTimeZone,
+  assertName, assertNoControlFields, assertPlatforms, assertSha256, assertTimeZone,
   civilDay, localTime, nextStreakCount, visibleStreak,
 } from '../core/domain/encargos.js';
 import { MAX_CLASS_B_GLOBAL, MAX_CLASS_B_USER } from '../core/domain/r2-quota.js';
+import { PRESIGN_TTL_SECONDS, signingUnavailableError } from '../adapters/storage/r2-presign.js';
 import { deleteAssetObjects } from './r2-gc.js';
 import { completeUpload, createUpload } from './uploads.js';
 
@@ -304,12 +305,15 @@ export async function reviewEncargoForBot(repo, encargoId) {
   return { ...view, content_hash: row.content_hash ?? null, synthetic: row.synthetic };
 }
 
-export async function readClaimedOrigin(repo, { encargoId, now, r2, actor = 'mcp' }) {
+export async function readClaimedOrigin(repo, { encargoId, now, r2, signer = null, env = null, actor = 'mcp' }) {
   if (!UUID_RE.test(encargoId ?? '')) throw NOT_FOUND();
   const row = await repo.encargoById(encargoId);
   if (!row) throw NOT_FOUND();
   if (row.status !== 'claimed') throw err('CONFLICT', 'El encargo no está reclamado', 409);
   const assets = await repo.listSourceAssets(encargoId);
+  const activeSigner = assets.length ? (signer ?? null) : null;
+  if (assets.length && !activeSigner) throw signingUnavailableError(env);
+  const expiry = new Date(Date.parse(now) + PRESIGN_TTL_SECONDS * 1000).toISOString();
   const checked = [];
   for (const asset of assets) {
     if (!r2) throw err('R2_UNAVAILABLE', 'El almacenamiento no está disponible', 503);
@@ -331,6 +335,27 @@ export async function readClaimedOrigin(repo, { encargoId, now, r2, actor = 'mcp
       stored_size: head ? Number(head.size) : null,
       matches: Boolean(head && head.sha256 === asset.sha256 && Number(head.size) === Number(asset.size_bytes)),
     });
+  }
+  const signedGets = [];
+  for (const asset of checked) {
+    const reservedGet = await repo.reserveDaily(row.user_id, 'b', now, MAX_CLASS_B_USER, MAX_CLASS_B_GLOBAL);
+    if (!reservedGet) {
+      for (let i = 0; i < signedGets.length; i += 1) await repo.releaseDaily(row.user_id, 'b', now);
+      throw err('QUOTA_EXCEEDED', 'Tope de lecturas alcanzado', 413);
+    }
+    try {
+      asset.url = await activeSigner.signGet(asset.r2_key, PRESIGN_TTL_SECONDS);
+      asset.expires_at = expiry;
+      signedGets.push(asset);
+    } catch (error) {
+      await repo.releaseDaily(row.user_id, 'b', now);
+      for (const done of signedGets) {
+        await repo.releaseDaily(row.user_id, 'b', now);
+        delete done.url;
+        delete done.expires_at;
+      }
+      throw error;
+    }
   }
   await repo.audit(actor, 'ENCARGO_ORIGIN_READ', null, {
     encargo_id: encargoId, account_id: row.account_id, assets: checked.length,
@@ -359,20 +384,6 @@ export async function claimEncargo(repo, { encargoId, now, actor = 'grok-bot' })
   const encargo = await botEncargo(repo, encargoId);
   await repo.audit(actor, 'ENCARGO_CLAIMED', null, { encargo_id: encargoId, account_id: encargo.account_id }, now);
   return { encargo_id: encargoId, status: 'claimed', encargo };
-}
-
-function assertR2Key(role, value) {
-  if (typeof value !== 'string' || value.length < 5 || value.length > 200 || /\s/.test(value)) {
-    throw err('INVALID_INPUT', 'Clave de objeto no válida', 400);
-  }
-  const prefix = role === 'source' ? 'src/' : 'out/';
-  if (!value.startsWith(prefix)) throw err('INVALID_INPUT', 'Clave de objeto no válida', 400);
-  return value;
-}
-
-function assertMime(value) {
-  if (typeof value !== 'string' || !/^[\w.+-]+\/[\w.+-]+$/.test(value)) throw err('INVALID_INPUT', 'mime no válido', 400);
-  return value;
 }
 
 function failureMessage(code) {
@@ -426,6 +437,31 @@ async function checkSourceIntegrity(repo, r2, encargo, body, now, actor) {
   }
 }
 
+async function loadDeliverable(repo, r2, encargo, body, version, now) {
+  if (body.deliverable == null) return null;
+  if (typeof body.deliverable !== 'object' || Array.isArray(body.deliverable) || typeof body.deliverable.r2_key !== 'string') {
+    throw err('INVALID_INPUT', 'La clave no corresponde a una subida preparada', 400);
+  }
+  const row = await repo.reservationForEncargo(encargo.encargo_id, body.deliverable.r2_key);
+  if (!row || row.consumed_at || row.released_at || Number(row.version) !== version || !String(row.r2_key).startsWith('out/')) {
+    throw err('INVALID_INPUT', 'La clave no corresponde a una subida preparada', 400);
+  }
+  if (!r2) throw err('R2_UNAVAILABLE', 'El almacenamiento no está disponible', 503);
+  const reserved = await repo.reserveDaily(encargo.user_id, 'b', now, MAX_CLASS_B_USER, MAX_CLASS_B_GLOBAL);
+  if (!reserved) throw err('QUOTA_EXCEEDED', 'Tope de lecturas alcanzado', 413);
+  let head;
+  try {
+    head = await r2.head(row.r2_key);
+  } catch {
+    await repo.releaseDaily(encargo.user_id, 'b', now);
+    throw err('R2_UNAVAILABLE', 'No se pudo comprobar la pieza', 503);
+  }
+  if (!head || Number(head.size) !== Number(row.size_bytes) || !head.md5 || head.md5 !== row.content_md5) {
+    throw err('INTEGRITY_ERROR', 'La pieza almacenada no coincide', 409);
+  }
+  return row;
+}
+
 export async function submitEncargoResult(repo, { encargoId, body, now, r2 = null, actor = 'grok-bot' }) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw err('INVALID_INPUT', 'El cuerpo debe ser un objeto JSON', 400);
   for (const key of ['mode', 'live', 'publisher_mode']) {
@@ -442,7 +478,8 @@ export async function submitEncargoResult(repo, { encargoId, body, now, r2 = nul
     throw err('INVALID_INPUT', 'Un encargo desde cero es material generado', 400);
   }
   const contentHash = assertSha256(body.content_hash, 'content_hash');
-  const version = encargo.delivered ? encargo.version + 1 : encargo.version;
+  const version = encargo.delivered ? Number(encargo.version) + 1 : Number(encargo.version);
+  const deliverable = await loadDeliverable(repo, r2, encargo, body, version, now);
   let batchId = null;
   if (body.batch_id !== undefined && body.batch_id !== null) {
     if (!BATCH_ID_RE.test(body.batch_id)) throw err('INVALID_INPUT', 'batch_id no válido', 400);
@@ -451,19 +488,30 @@ export async function submitEncargoResult(repo, { encargoId, body, now, r2 = nul
     if (attached === 'foreign') throw NOT_FOUND();
     batchId = body.batch_id;
   }
+  let consumedAt = null;
+  if (deliverable) {
+    consumedAt = now;
+    const consumed = await repo.markReservationConsumed(deliverable.reservation_id, consumedAt);
+    if (!consumed) throw err('CONFLICT', 'La reserva de subida ya no está disponible', 409);
+  }
   const ok = await repo.finishEncargoResult({ encargoId, version, contentHash, synthetic: body.synthetic, batchId, now });
-  if (!ok) throw err('CONFLICT', 'El encargo no está reclamado', 409);
-  if (body.deliverable) {
+  if (!ok) {
+    if (deliverable) await repo.reopenReservation(deliverable.reservation_id, consumedAt);
+    throw err('CONFLICT', 'El encargo no está reclamado', 409);
+  }
+  if (deliverable) {
     await repo.addEncargoAsset({
       encargoId: encargo.encargo_id,
       userId: encargo.user_id,
       role: 'deliverable',
-      r2Key: assertR2Key('deliverable', body.deliverable.r2_key),
-      sha256: assertSha256(body.deliverable.sha256, 'sha256'),
-      mime: assertMime(body.deliverable.mime),
-      sizeBytes: assertAssetBytes(body.deliverable.size_bytes),
+      r2Key: deliverable.r2_key,
+      sha256: deliverable.sha256,
+      mime: deliverable.mime,
+      sizeBytes: Number(deliverable.size_bytes),
       version,
       now,
+      contentMd5: deliverable.content_md5,
+      countBytes: false,
     });
   }
   await repo.recordEncargoEvent(encargo.account_id, encargoId, now, 'ready', { version, synthetic: body.synthetic });

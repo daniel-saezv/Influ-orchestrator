@@ -1,6 +1,6 @@
 # Esquema de datos (D1 `influ-poc-db`)
 
-Migraciones: `migrations/0001_init.sql` … `migrations/0006_encargo_failed.sql`. Una tabla por entidad (equivalente a n8n Data Tables).
+Migraciones: `migrations/0001_init.sql` … `migrations/0007_deliverable_reservations.sql`. Una tabla por entidad (equivalente a n8n Data Tables).
 
 | Tabla | Contenido | Claves |
 |---|---|---|
@@ -23,3 +23,6 @@ SHA-256 sobre JSON canónico (claves ordenadas) de: `batch_id`, `title`, `person
 
 ## Estado `failed` (migración 0006)
 `encargos.status` admite `failed`. Lo escribe `POST /v1/encargos/:id/result` cuando el `head` de una parte o el SHA-256 del archivo no coinciden. El resto de estados no cambia.
+
+## Reservas de subida (migración 0007)
+`deliverable_reservations` guarda la clave, el SHA-256 declarado, el MD5, el MIME, el tamaño y la caducidad de un PUT prefirmado. `encargo_assets.content_md5` guarda ese MD5 al enlazar la pieza. Si la reserva caduca sin usarse, el cron suelta los bytes y la clase A.

@@ -326,16 +326,21 @@ export class D1Repository {
     return r.meta.changes === 1;
   }
 
-  async addEncargoAsset({ encargoId, userId, role, r2Key, sha256, mime, sizeBytes, version, now }) {
+  async addEncargoAsset({ encargoId, userId, role, r2Key, sha256, mime, sizeBytes, version, now, contentMd5 = null, countBytes = true }) {
     const assetId = crypto.randomUUID();
-    await this.db.batch([
-      this.db.prepare(`INSERT INTO encargo_assets (asset_id, encargo_id, role, r2_key, sha256, mime, size_bytes, version, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(assetId, encargoId, role, r2Key, sha256, mime, sizeBytes, version, now),
-      this.db.prepare(`INSERT INTO r2_bytes (scope, bytes_stored) VALUES ('global', ?)
-        ON CONFLICT(scope) DO UPDATE SET bytes_stored = bytes_stored + excluded.bytes_stored`).bind(sizeBytes),
-      this.db.prepare(`INSERT INTO r2_bytes (scope, bytes_stored) VALUES (?, ?)
-        ON CONFLICT(scope) DO UPDATE SET bytes_stored = bytes_stored + excluded.bytes_stored`).bind(userId, sizeBytes),
-    ]);
+    const stmts = [
+      this.db.prepare(`INSERT INTO encargo_assets (asset_id, encargo_id, role, r2_key, sha256, mime, size_bytes, version, created_at, content_md5)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(assetId, encargoId, role, r2Key, sha256, mime, sizeBytes, version, now, contentMd5),
+    ];
+    if (countBytes) {
+      stmts.push(
+        this.db.prepare(`INSERT INTO r2_bytes (scope, bytes_stored) VALUES ('global', ?)
+          ON CONFLICT(scope) DO UPDATE SET bytes_stored = bytes_stored + excluded.bytes_stored`).bind(sizeBytes),
+        this.db.prepare(`INSERT INTO r2_bytes (scope, bytes_stored) VALUES (?, ?)
+          ON CONFLICT(scope) DO UPDATE SET bytes_stored = bytes_stored + excluded.bytes_stored`).bind(userId, sizeBytes),
+      );
+    }
+    await this.db.batch(stmts);
     return assetId;
   }
 
@@ -357,7 +362,7 @@ export class D1Repository {
   }
 
   async mediaForEmail(email, sha256) {
-    return this.db.prepare(`SELECT s.sha256, s.mime, s.size_bytes, s.role, s.encargo_id, s.r2_key, s.delete_pending
+    return this.db.prepare(`SELECT s.sha256, s.mime, s.size_bytes, s.role, s.encargo_id, s.r2_key, s.delete_pending, s.content_md5
       FROM encargo_assets s
       JOIN encargos e ON e.encargo_id = s.encargo_id
       JOIN accounts a ON a.account_id = e.account_id
@@ -740,6 +745,55 @@ export class D1Repository {
     ];
     if (Number(session.bytes_reserved) > 0) stmts.push(...byteRelease(this.db, session.user_id, Number(session.bytes_reserved)));
     await this.db.batch(stmts);
+  }
+
+  async insertDeliverableReservation(row) {
+    await this.db.prepare(`INSERT INTO deliverable_reservations (
+      reservation_id, encargo_id, user_id, r2_key, version, sha256, content_md5, mime, size_bytes,
+      bytes_held, class_a_held, quota_day, expires_at, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+      row.reservationId, row.encargoId, row.userId, row.r2Key, row.version, row.sha256, row.contentMd5, row.mime,
+      row.sizeBytes, row.bytesHeld, row.classAHeld, row.quotaDay, row.expiresAt, row.now,
+    ).run();
+  }
+
+  async listOpenReservations(encargoId) {
+    const r = await this.db.prepare(`SELECT * FROM deliverable_reservations
+      WHERE encargo_id = ? AND consumed_at IS NULL AND released_at IS NULL
+      ORDER BY created_at`).bind(encargoId).all();
+    return r.results;
+  }
+
+  async reservationForEncargo(encargoId, r2Key) {
+    return this.db.prepare(`SELECT * FROM deliverable_reservations WHERE encargo_id = ? AND r2_key = ?`).bind(encargoId, r2Key).first();
+  }
+
+  async listExpiredReservations(now, limit) {
+    const r = await this.db.prepare(`SELECT * FROM deliverable_reservations
+      WHERE consumed_at IS NULL AND released_at IS NULL AND expires_at <= ?
+      ORDER BY expires_at LIMIT ?`).bind(now, limit).all();
+    return r.results;
+  }
+
+  async markReservationReleased(reservationId, now) {
+    const r = await this.db.prepare(`UPDATE deliverable_reservations
+      SET released_at = ?, bytes_held = 0, class_a_held = 0
+      WHERE reservation_id = ? AND consumed_at IS NULL AND released_at IS NULL`).bind(now, reservationId).run();
+    return r.meta.changes === 1;
+  }
+
+  async markReservationConsumed(reservationId, now) {
+    const r = await this.db.prepare(`UPDATE deliverable_reservations
+      SET consumed_at = ?
+      WHERE reservation_id = ? AND consumed_at IS NULL AND released_at IS NULL`).bind(now, reservationId).run();
+    return r.meta.changes === 1;
+  }
+
+  async reopenReservation(reservationId, consumedAt) {
+    const r = await this.db.prepare(`UPDATE deliverable_reservations
+      SET consumed_at = NULL
+      WHERE reservation_id = ? AND consumed_at = ? AND released_at IS NULL`).bind(reservationId, consumedAt).run();
+    return r.meta.changes === 1;
   }
 }
 
