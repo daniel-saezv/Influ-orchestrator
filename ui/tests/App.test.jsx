@@ -18,6 +18,8 @@ describe('mobile creation flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Entrar' }))
     expect(await screen.findByRole('heading', { name: 'Así de simple' })).toBeInTheDocument()
+    expect(document.querySelectorAll('[data-slot="card"]')).toHaveLength(3)
+    expect(screen.getByRole('heading', { name: 'Así de simple' }).closest('.screen')).toHaveClass('view-enter')
     await user.click(screen.getByRole('button', { name: 'Empezar' }))
     await user.type(screen.getByLabelText('Nombre'), 'Alex')
     await user.click(screen.getByRole('button', { name: 'Listo' }))
