@@ -1,13 +1,13 @@
 {
   "name": "Influe",
   "short_name": "Influe",
-  "description": "Prepara y programa contenido simulado.",
+  "description": "El camerino de tu influencer virtual, en simulación.",
   "lang": "es",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#fffdf8",
-  "theme_color": "#315b4c",
+  "background_color": "#f4eee3",
+  "theme_color": "#241d16",
   "icons": [
     {
       "src": "/icons/icon-192.png",

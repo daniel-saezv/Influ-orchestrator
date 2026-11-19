@@ -526,7 +526,7 @@ async function scheduleEncargo(encargoId, input = {}) {
   }
   const publishedAt = input.when === 'now' || input.mode === 'now' || input.now
     ? tick()
-    : input.publish_at ?? input.scheduled_at
+    : input.publish_at ?? input.scheduled_at ?? input.when
   if (!publishedAt || Number.isNaN(Date.parse(publishedAt))) return badRequest('Indica cuándo publicarla.')
   encargo.publish_at = new Date(publishedAt).toISOString()
   encargo.status = 'scheduled'
