@@ -1,6 +1,6 @@
 # Esquema de datos (D1 `influ-poc-db`)
 
-Migraciones: `migrations/0001_init.sql` … `migrations/0007_deliverable_reservations.sql`. Una tabla por entidad (equivalente a n8n Data Tables).
+Migraciones: `migrations/0001_init.sql` … `migrations/0008_encargo_format.sql`. Una tabla por entidad (equivalente a n8n Data Tables).
 
 | Tabla | Contenido | Claves |
 |---|---|---|
@@ -26,3 +26,6 @@ SHA-256 sobre JSON canónico (claves ordenadas) de: `batch_id`, `title`, `person
 
 ## Reservas de subida (migración 0007)
 `deliverable_reservations` guarda la clave, el SHA-256 declarado, el MD5, el MIME, el tamaño y la caducidad de un PUT prefirmado. `encargo_assets.content_md5` guarda ese MD5 al enlazar la pieza. Si la reserva caduca sin usarse, el cron suelta los bytes y la clase A.
+
+## Formato del encargo (migración 0008)
+`encargos.format` (`image`, `carousel`, `short_video`, `video`) y `encargos.targets_json` (un destino por red). Las filas anteriores quedan con NULL y la API las devuelve con `legacy: true`. `platforms_json` se mantiene.

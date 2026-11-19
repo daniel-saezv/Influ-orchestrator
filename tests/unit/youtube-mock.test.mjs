@@ -45,6 +45,17 @@ test('ESCENARIO archivo incompatible: MIME no vídeo y firma inválida', async (
   assert.equal(up.ok, false); assert.equal(up.error.code, 'VALIDATION_ERROR');
   const big = await a.validatePost(post({ media: { ...post().media, size_bytes: 21 * 1024 * 1024 } }));
   assert.ok(big.errors.some((e) => e.field === 'media.size_bytes'));
+  const wide = await a.validatePost(post({ media: { ...post().media, width: 1280, height: 720 } }));
+  assert.ok(wide.errors.some((e) => e.field === 'media.width'));
+  const long = await a.validatePost(post({ media: { ...post().media, duration_s: 181 } }));
+  assert.ok(long.errors.some((e) => e.field === 'media.duration_s'));
+  const square = await a.validatePost(post({ media: { ...post().media, width: 1080, height: 1080, duration_s: 180 } }));
+  assert.equal(square.ok, true);
+  const normal = await a.validatePost(post({
+    content_type: 'video', target: 'video',
+    media: { ...post().media, width: 1280, height: 720, duration_s: 600 },
+  }));
+  assert.equal(normal.ok, true);
 });
 
 test('ESCENARIO metadatos incompletos', async () => {

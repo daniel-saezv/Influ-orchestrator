@@ -56,6 +56,7 @@ export function validateBatchInput(input) {
       media: {
         sha256: p.media.sha256, mime: p.media.mime, size_bytes: p.media.size_bytes, filename: p.media.filename,
         duration_s: p.media.duration_s ?? null, width: p.media.width ?? null, height: p.media.height ?? null,
+        ...(Number.isInteger(p.media.item_count) ? { item_count: p.media.item_count } : {}),
       },
       copy: p.copy,
       scheduled_at: new Date(p.scheduled_at).toISOString(),

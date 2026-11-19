@@ -67,7 +67,7 @@ async function queuedEdit(h, email, bytes) {
   const guide = await h.read(await h.call('POST', '/v1/me', email, { json: { display_name: 'Ana', time_zone: 'Europe/Madrid' } }));
   assert.equal(guide.status, 200, JSON.stringify(guide.error));
   const created = await h.read(await h.call('POST', '/v1/me/encargos', email, {
-    json: { account_id: guide.data.accounts[0].account_id, kind: 'edit', platforms: ['youtube'] },
+    json: { account_id: guide.data.accounts[0].account_id, kind: 'edit', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }] },
   }));
   const digest = shaHex(bytes);
   const opened = await h.read(await h.call('POST', '/v1/me/uploads', email, {

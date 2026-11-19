@@ -25,6 +25,9 @@ export async function publishOne(pub, ctx) {
     return { publication_id: pub.publication_id, status, stage, error, attempts: pub.attempts, next_retry_at: next };
   };
 
+  const scoped = await withEncargoTarget(post, ctx);
+  if (scoped.error) return fail(scoped.error, 'validatePost');
+  Object.assign(post, scoped.post);
   const loaded = await resolvePublishMedia(post, ctx);
   if (loaded.error) return fail(loaded.error, 'storage');
   if (loaded.verified) post.media = { ...post.media, verified: 'r2-sha256' };
@@ -93,6 +96,17 @@ export async function resolvePublishMedia(post, ctx) {
   const realSha = await sha256Hex(stored.bytes);
   if (realSha !== post.media.sha256) return { error: { code: 'MEDIA_INTEGRITY', message: 'La huella del archivo almacenado no coincide', retryable: false } };
   return { verified: false, media: { bytes: stored.bytes, mime: stored.mime, size_bytes: stored.bytes.length, sha256: realSha } };
+}
+
+async function withEncargoTarget(post, ctx) {
+  if (!ctx.repo.encargoByBatch || !post.batch_id) return { post };
+  const encargo = await ctx.repo.encargoByBatch(post.batch_id);
+  if (!encargo?.format) return { post };
+  const match = (encargo.targets ?? []).find((item) => item.platform === post.platform);
+  if (!match) {
+    return { error: { code: ErrorCode.VALIDATION_ERROR, message: 'La red no está en el encargo', retryable: false } };
+  }
+  return { post: { ...post, format: encargo.format, target: match.target } };
 }
 
 function normalizedFromRow(p) {

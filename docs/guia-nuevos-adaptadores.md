@@ -7,7 +7,7 @@ Pasos:
 2. Implementar los 5 métodos de `SocialPublisher` con respuestas normalizadas.
 3. Registrar en `src/adapters/publishers/registry.js`: `instagram: { mock: (d) => new InstagramMockPublisher(d), live: ... }`.
 4. Añadir pruebas en `tests/unit/` con los 8 escenarios del simulador.
-5. Desplegar (`node deploy/build.mjs worker`). Los lotes ya admiten `platform: "instagram" | "tiktok"` y `content_type` `reel`, `image`, `carousel`, `story`.
+5. Desplegar (`node deploy/build.mjs worker`). Los lotes ya admiten `platform: "instagram" | "tiktok"` y `content_type` `reel`, `image`, `carousel`, `story`. `validatePost` también entiende `target` (`short`, `video`, `feed`, `reel`, `story`, `photo`) cuando el encargo lo trae.
 
 Referencias oficiales para la fase LIVE (a verificar al implementar, no usadas aún): Instagram Graph API (Content Publishing) y TikTok Content Posting API. Ambas requieren app aprobada y OAuth del titular de la cuenta.
 

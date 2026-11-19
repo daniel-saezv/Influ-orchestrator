@@ -80,7 +80,7 @@ export function createInfluServer(env) {
       encargo_id: encargoId,
       sha256: z.string().describe('SHA-256 hex del archivo que vas a subir'),
       content_md5: z.string().describe('MD5 en base64 del archivo, el valor exacto de Content-MD5'),
-      mime: z.string().describe('image/*, video/* o audio/*'),
+      mime: z.string().describe('image/* o video/*, acorde al formato del encargo'),
       size_bytes: z.number().int().describe('Tamaño en bytes, de 1 a 150 MiB'),
     }),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },

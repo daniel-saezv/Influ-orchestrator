@@ -27,7 +27,7 @@ async function createReadyEncargo() {
     account_id: account.id,
     kind: 'from_scratch',
     note: 'Un vídeo de prueba',
-    platforms: ['youtube', 'instagram', 'tiktok'],
+    format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }, { platform: 'instagram', target: 'reel' }, { platform: 'tiktok', target: 'video' }],
   })
   await fakeApi.getEncargo(created.data.id)
   const ready = await fakeApi.getEncargo(created.data.id)
@@ -75,7 +75,7 @@ describe('fake Phase B API', () => {
     expect((await fakeApi.getStreak(other.id)).status).toBe(404)
     expect((await fakeApi.getActivity(other.id)).status).toBe(404)
     expect((await fakeApi.updateAccount(other.id, { name: 'Robo' })).status).toBe(404)
-    expect((await fakeApi.createEncargo({ account_id: other.id, kind: 'edit', platforms: ['youtube'], note: 'x' })).status).toBe(404)
+    expect((await fakeApi.createEncargo({ account_id: other.id, kind: 'edit', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }], note: 'x' })).status).toBe(404)
   })
 
   it('rejects file, user and global byte limits before reserving', async () => {
@@ -104,7 +104,7 @@ describe('fake Phase B API', () => {
   it('returns queued, preparing and ready while polling deterministically', async () => {
     const account = await firstAccount()
     const created = await fakeApi.createEncargo({
-      account_id: account.id, kind: 'from_scratch', note: 'Vídeo', platforms: ['youtube'],
+      account_id: account.id, kind: 'from_scratch', note: 'Vídeo', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }],
     })
     expect(created.data.status).toBe('queued')
     expect((await fakeApi.getEncargo(created.data.id)).data.status).toBe('preparing')
@@ -130,7 +130,7 @@ describe('fake Phase B API', () => {
     }))
     const account = await firstAccount()
     const edit = await fakeApi.createEncargo({
-      account_id: account.id, kind: 'edit', note: 'Recorta', platforms: ['youtube'], synthetic: false,
+      account_id: account.id, kind: 'edit', note: 'Recorta', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }], synthetic: false,
     })
     await fakeApi.getEncargo(edit.data.id)
     const readyEdit = await fakeApi.getEncargo(edit.data.id)
@@ -178,7 +178,7 @@ describe('fake Phase B API', () => {
     const completed = await fakeApi.completeUpload(upload.data.id)
     const account = await firstAccount()
     const created = await fakeApi.createEncargo({
-      account_id: account.id, kind: 'edit', note: 'Editar', platforms: ['youtube'],
+      account_id: account.id, kind: 'edit', note: 'Editar', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }],
       source_sha256: completed.data.sha256,
     })
     await fakeApi.cancelEncargo(created.data.id)

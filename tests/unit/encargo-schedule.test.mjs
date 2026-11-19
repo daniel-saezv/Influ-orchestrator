@@ -74,7 +74,7 @@ async function linkedEncargo(repo, ctx, accountId, batchId, media) {
     }],
   }, ctx);
   const created = await createEncargo(repo, {
-    email: EMAIL, now: NOW, body: { account_id: accountId, kind: 'from_scratch', note: 'una pieza', platforms: ['youtube'] },
+    email: EMAIL, now: NOW, body: { account_id: accountId, kind: 'from_scratch', note: 'una pieza', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }] },
   });
   await claimEncargo(repo, { encargoId: created.encargo_id, now: NOW });
   await submitEncargoResult(repo, {
@@ -165,7 +165,7 @@ test('sin batch_id se aprueba y se programa, y el cron no tiene lote que publica
   const { repo, ctx } = world();
   const accountId = await account(repo);
   const created = await createEncargo(repo, {
-    email: EMAIL, now: NOW, body: { account_id: accountId, kind: 'from_scratch', note: 'una pieza', platforms: ['youtube'] },
+    email: EMAIL, now: NOW, body: { account_id: accountId, kind: 'from_scratch', note: 'una pieza', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }] },
   });
   await claimEncargo(repo, { encargoId: created.encargo_id, now: NOW });
   await submitEncargoResult(repo, {

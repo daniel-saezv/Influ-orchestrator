@@ -69,16 +69,31 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   const renamed = await json(await call('PATCH', `/v1/me/accounts/${accountId}`, person('ana@example.com'), { name: 'Ana principal' }));
   assert.equal(renamed.data.name, 'Ana principal');
 
+  const mismatch = await json(await call('POST', '/v1/me/encargos', person('ana@example.com'), {
+    account_id: accountId, kind: 'from_scratch', note: 'foto en youtube',
+    format: 'image', targets: [{ platform: 'youtube', target: 'short' }],
+  }));
+  assert.equal(mismatch.status, 400);
   const created = await json(await call('POST', '/v1/me/encargos', person('ana@example.com'), {
-    account_id: accountId, kind: 'from_scratch', note: 'un vídeo corto', platforms: ['youtube', 'instagram'],
+    account_id: accountId, kind: 'from_scratch', note: 'un vídeo corto', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }, { platform: 'instagram', target: 'reel' }],
   }));
   assert.equal(created.data.status, 'queued');
+  assert.equal(created.data.format, 'short_video');
+  assert.deepEqual(created.data.targets, [
+    { platform: 'youtube', target: 'short' },
+    { platform: 'instagram', target: 'reel' },
+  ]);
   const encargoId = created.data.encargo_id;
 
   const draft = await json(await call('POST', '/v1/me/encargos', person('ana@example.com'), {
-    account_id: extra.data.account_id, kind: 'edit', platforms: ['tiktok'],
+    account_id: extra.data.account_id, kind: 'edit', format: 'short_video', targets: [{ platform: 'tiktok', target: 'video' }],
   }));
   assert.equal(draft.data.status, 'draft');
+  shim._raw.prepare('UPDATE encargos SET format = NULL, targets_json = NULL WHERE encargo_id = ?').run(draft.data.encargo_id);
+  const legacy = await json(await call('GET', `/v1/me/encargos/${draft.data.encargo_id}`, person('ana@example.com')));
+  assert.equal(legacy.data.format, null);
+  assert.equal(legacy.data.legacy, true);
+  assert.deepEqual(legacy.data.platforms, ['tiktok']);
 
   const listed = await json(await call('GET', '/v1/me/encargos', person('ana@example.com')));
   assert.equal(listed.status, 200);
@@ -98,6 +113,8 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   assert.equal(queued.status, 200);
   assert.equal(queued.data.encargos.length, 1);
   assert.equal(queued.data.encargos[0].encargo_id, encargoId);
+  assert.equal(queued.data.encargos[0].format, 'short_video');
+  assert.equal(queued.data.encargos[0].legacy, false);
   assert.equal(JSON.stringify(queued.data).includes('ana@example.com'), false);
   assert.equal(JSON.stringify(queued.data).includes('ciphertext'), false);
   const asApprover = await bot.call('POST', `/v1/encargos/${encargoId}/claim`, { keyId: 'approver' });
@@ -105,6 +122,11 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
 
   const claim = await bot.call('POST', `/v1/encargos/${encargoId}/claim`);
   assert.equal(claim.status, 200);
+  assert.equal(claim.data.encargo.format, 'short_video');
+  assert.deepEqual(claim.data.encargo.targets, [
+    { platform: 'youtube', target: 'short' },
+    { platform: 'instagram', target: 'reel' },
+  ]);
   const rejected = await bot.call('POST', `/v1/encargos/${encargoId}/result`, { body: { synthetic: false, content_hash: HASH } });
   assert.equal(rejected.status, 400);
   const freeKey = await bot.call('POST', `/v1/encargos/${encargoId}/result`, { body: {
@@ -217,7 +239,7 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   assert.equal(scheduled.data.status, 'scheduled');
 
   const second = await json(await call('POST', '/v1/me/encargos', person('ana@example.com'), {
-    account_id: accountId, kind: 'from_scratch', note: 'otro', platforms: ['youtube'],
+    account_id: accountId, kind: 'from_scratch', note: 'otro', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }],
   }));
   await bot.call('POST', `/v1/encargos/${second.data.encargo_id}/claim`);
   await bot.call('POST', `/v1/encargos/${second.data.encargo_id}/result`, { body: { synthetic: true, content_hash: HASH } });
@@ -256,7 +278,7 @@ test('la racha usa el día civil de la zona, no el día UTC', async () => {
   const guide = await saveGuide(repo, { email, body: { display_name: 'Ana', time_zone: 'America/Los_Angeles' }, now: NOW_1 });
   const accountId = guide.accounts[0].account_id;
   async function closeOne(note, now) {
-    const created = await createEncargo(repo, { email, body: { account_id: accountId, kind: 'from_scratch', note, platforms: ['youtube'] }, now });
+    const created = await createEncargo(repo, { email, body: { account_id: accountId, kind: 'from_scratch', note, format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }] }, now });
     await claimEncargo(repo, { encargoId: created.encargo_id, now });
     await submitEncargoResult(repo, { encargoId: created.encargo_id, body: { synthetic: true, content_hash: HASH }, now });
     await decideEncargo(repo, { email, encargoId: created.encargo_id, body: { decision: 'approve', version: 1, content_hash: HASH }, now });

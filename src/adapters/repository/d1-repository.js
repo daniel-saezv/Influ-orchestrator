@@ -238,13 +238,13 @@ export class D1Repository {
     return { account_id: accountId, name };
   }
 
-  async insertEncargo({ accountId, kind, note, status, platforms, now }) {
+  async insertEncargo({ accountId, kind, note, status, platforms, format, targets, now }) {
     const encargoId = crypto.randomUUID();
     await this.db.batch([
-      this.db.prepare(`INSERT INTO encargos (encargo_id, account_id, kind, note, status, platforms_json, version, delivered, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)`).bind(encargoId, accountId, kind, note, status, j(platforms), now, now),
+      this.db.prepare(`INSERT INTO encargos (encargo_id, account_id, kind, note, status, platforms_json, format, targets_json, version, delivered, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)`).bind(encargoId, accountId, kind, note, status, j(platforms), format, j(targets), now, now),
       this.db.prepare('INSERT INTO encargo_events (account_id, encargo_id, at, kind, detail_json) VALUES (?, ?, ?, ?, ?)')
-        .bind(accountId, encargoId, now, 'created', j({ kind, platforms })),
+        .bind(accountId, encargoId, now, 'created', j({ kind, platforms, format, targets })),
     ]);
     return encargoId;
   }
@@ -277,7 +277,7 @@ export class D1Repository {
   }
 
   async listQueuedEncargos() {
-    const rows = (await this.db.prepare(`SELECT e.encargo_id, e.account_id, a.name AS account_name, e.kind, e.note, e.platforms_json, e.version,
+    const rows = (await this.db.prepare(`SELECT e.encargo_id, e.account_id, a.name AS account_name, e.kind, e.note, e.platforms_json, e.format, e.targets_json, e.version,
       (SELECT u.file_sha256 FROM upload_sessions u
         WHERE u.encargo_id = e.encargo_id AND u.completed_at IS NOT NULL
         ORDER BY u.completed_at DESC LIMIT 1) AS file_sha256
@@ -294,6 +294,9 @@ export class D1Repository {
       kind: row.kind,
       note: row.note,
       platforms: JSON.parse(row.platforms_json),
+      format: row.format ?? null,
+      targets: row.targets_json ? JSON.parse(row.targets_json) : null,
+      legacy: row.format == null,
       version: row.version,
       file_sha256: row.file_sha256 ?? null,
       assets: assets.filter((a) => a.encargo_id === row.encargo_id).map(({ encargo_id, ...rest }) => rest),
@@ -805,7 +808,14 @@ function byteRelease(db, userId, bytes) {
 }
 
 function parseEncargo(row) {
-  return { ...row, platforms: JSON.parse(row.platforms_json), synthetic: row.synthetic === null || row.synthetic === undefined ? null : row.synthetic === 1 };
+  return {
+    ...row,
+    platforms: JSON.parse(row.platforms_json),
+    format: row.format ?? null,
+    targets: row.targets_json ? JSON.parse(row.targets_json) : null,
+    legacy: row.format == null,
+    synthetic: row.synthetic === null || row.synthetic === undefined ? null : row.synthetic === 1,
+  };
 }
 
 function parsePub(r) {

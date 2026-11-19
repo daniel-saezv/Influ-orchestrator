@@ -36,6 +36,49 @@ import { applyTheme, readTheme, saveTheme } from './lib/theme.js'
 const PLATFORMS = ['YouTube', 'Instagram', 'TikTok']
 const days = (count) => `${count} ${count === 1 ? 'día' : 'días'}`
 const platformLabel = (value) => String(value).split(',').map((item) => PLATFORMS.find((name) => name.toLowerCase() === item.trim().toLowerCase()) ?? item.trim()).join(', ')
+const FORMATS = [
+  { id: 'image', label: 'Foto', hint: 'Una imagen' },
+  { id: 'carousel', label: 'Carrusel', hint: 'Varias fotos' },
+  { id: 'short_video', label: 'Vídeo corto', hint: 'Vertical, hasta 3 min' },
+  { id: 'video', label: 'Vídeo', hint: 'Pieza larga' },
+]
+const TARGETS = {
+  image: [
+    { id: 'instagram:feed', platform: 'instagram', label: 'Feed' },
+    { id: 'instagram:story', platform: 'instagram', label: 'Story' },
+    { id: 'tiktok:photo', platform: 'tiktok', label: 'TikTok' },
+  ],
+  carousel: [
+    { id: 'instagram:feed', platform: 'instagram', label: 'Carrusel' },
+    { id: 'tiktok:photo', platform: 'tiktok', label: 'TikTok' },
+  ],
+  short_video: [
+    { id: 'youtube:short', platform: 'youtube', label: 'YouTube Short' },
+    { id: 'instagram:reel', platform: 'instagram', label: 'Reel' },
+    { id: 'instagram:story', platform: 'instagram', label: 'Story' },
+    { id: 'tiktok:video', platform: 'tiktok', label: 'TikTok' },
+  ],
+  video: [
+    { id: 'youtube:video', platform: 'youtube', label: 'YouTube' },
+    { id: 'instagram:reel', platform: 'instagram', label: 'Reel' },
+    { id: 'tiktok:video', platform: 'tiktok', label: 'TikTok' },
+  ],
+}
+const formatLabel = (format) => FORMATS.find((item) => item.id === format)?.label ?? 'Formato anterior'
+function targetText(item) {
+  if (!item?.format) return platformLabel((item?.platforms ?? []).join(',')) || 'Formato anterior'
+  return (item.targets ?? []).map((target) => {
+    if (item.format === 'carousel' && target.platform === 'instagram') return 'Carrusel de Instagram'
+    if (item.format === 'image' && target.platform === 'instagram' && target.target === 'feed') return 'Feed de Instagram'
+    return TARGETS[item.format]?.find((choice) => choice.id === `${target.platform}:${target.target}`)?.label ?? target.platform
+  }).join(', ')
+}
+function keepOnePerNetwork(current, next) {
+  const added = next.find((id) => !current.includes(id))
+  if (!added) return next
+  const platform = added.slice(0, added.indexOf(':'))
+  return next.filter((id) => id === added || !id.startsWith(`${platform}:`))
+}
 const MAX_FILE_BYTES = 150 * 1024 * 1024
 const PART_BYTES = 5 * 1024 * 1024
 const UPLOAD_KEY = 'influ-upload-session'
@@ -152,11 +195,22 @@ function readStudioDraft() {
     const raw = sessionStorage.getItem(DRAFT_KEY)
     if (!raw) return null
     const data = JSON.parse(raw)
-    const platforms = Array.isArray(data?.platforms) ? data.platforms.filter((item) => PLATFORMS.includes(item)) : []
+    const format = FORMATS.some((item) => item.id === data?.format) ? data.format : ''
+    const allowed = new Set((TARGETS[format] ?? []).map((item) => item.id))
+    const seen = new Set()
+    const targets = []
+    for (const id of Array.isArray(data?.targets) ? data.targets : []) {
+      if (!allowed.has(id)) continue
+      const platform = id.slice(0, id.indexOf(':'))
+      if (seen.has(platform)) continue
+      seen.add(platform)
+      targets.push(id)
+    }
     return {
       kind: data?.kind === 'edit' ? 'edit' : 'from_scratch',
       note: typeof data?.note === 'string' ? data.note.slice(0, 4000) : '',
-      platforms: platforms.length ? platforms : ['YouTube'],
+      format,
+      targets,
     }
   } catch {
     return null
@@ -272,13 +326,28 @@ function CancelEncargoAction({ encargo, busy, onConfirm }) {
   )
 }
 
-function PlatformChoices({ value, onChange }) {
+function FormatChoices({ value, onChange }) {
   return (
-    <ToggleGroup type="multiple" className="chips" value={value} onValueChange={(next) => { tap(); onChange(next) }} aria-label="Plataformas">
-      {PLATFORMS.map((platform) => (
-        <ToggleGroupItem key={platform} value={platform} className="chip">
-          <span className={`platform-dot platform-${platform.toLowerCase()}`} aria-hidden="true" />
-          {platform}
+    <ToggleGroup type="single" className="format-grid" value={value} onValueChange={(next) => { if (next) { tap(); onChange(next) } }} aria-label="Formato">
+      {FORMATS.map((format) => (
+        <ToggleGroupItem key={format.id} value={format.id} className="chip format-card">
+          <span>{format.label}</span>
+          <small>{format.hint}</small>
+          <Check aria-hidden="true" className="chip-check" />
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  )
+}
+
+function TargetChoices({ format, value, onChange }) {
+  const choices = TARGETS[format] ?? []
+  return (
+    <ToggleGroup type="multiple" className="chips" value={value} onValueChange={(next) => { tap(); onChange(keepOnePerNetwork(value, next)) }} aria-label="Destinos">
+      {choices.map((choice) => (
+        <ToggleGroupItem key={choice.id} value={choice.id} className="chip">
+          <span className={`platform-dot platform-${choice.platform}`} aria-hidden="true" />
+          {choice.label}
           <Check aria-hidden="true" className="chip-check" />
         </ToggleGroupItem>
       ))}
@@ -329,7 +398,13 @@ function FramePreview({ preview, posterOnly, onMediaError, note, version }) {
     return <img className="frame-media frame-media-image" src={preview.url} alt="Previa del encargo" onError={onMediaError} />
   }
   if (kind === 'audio') {
-    return <audio className="frame-media frame-media-audio" src={preview.url} controls onError={onMediaError} />
+    return (
+      <div className="poster" role="img" aria-label="Pieza de audio anterior">
+        <span className="poster-light" aria-hidden="true" />
+        <p className="poster-title">Audio anterior</p>
+        <span className="poster-meta">Se puede leer, sin reproducción</span>
+      </div>
+    )
   }
   return <video className="frame-media" src={preview.url} playsInline controls onError={onMediaError} />
 }
@@ -488,7 +563,8 @@ function App({ api = realApi }) {
   const [kind, setKind] = useState(() => readStudioDraft()?.kind ?? 'from_scratch')
   const [note, setNote] = useState(() => readStudioDraft()?.note ?? '')
   const [files, setFiles] = useState([])
-  const [platforms, setPlatforms] = useState(() => readStudioDraft()?.platforms ?? ['YouTube'])
+  const [format, setFormat] = useState(() => readStudioDraft()?.format ?? '')
+  const [targets, setTargets] = useState(() => readStudioDraft()?.targets ?? [])
   const [encargo, setEncargo] = useState(null)
   const [encargos, setEncargos] = useState(null)
   const [approved, setApproved] = useState(false)
@@ -555,9 +631,9 @@ function App({ api = realApi }) {
 
   useEffect(() => {
     if (screen !== 'studio') return undefined
-    writeSession(DRAFT_KEY, JSON.stringify({ kind, note, platforms }))
+    writeSession(DRAFT_KEY, JSON.stringify({ kind, note, format, targets }))
     return undefined
-  }, [screen, kind, note, platforms])
+  }, [screen, kind, note, format, targets])
 
   useEffect(() => {
     if (arrive !== 'ready' || screen !== 'preview') return undefined
@@ -855,7 +931,11 @@ function App({ api = realApi }) {
       account_id: account.id,
       kind,
       note,
-      platforms: platforms.map((platform) => platform.toLowerCase()),
+      format,
+      targets: targets.map((id) => {
+        const [platform, target] = id.split(':')
+        return { platform, target }
+      }),
     })
     if (!created.ok) {
       fail(created.error.message)
@@ -1099,7 +1179,8 @@ function App({ api = realApi }) {
     setKind('from_scratch')
     setNote('')
     setFiles([])
-    setPlatforms(['YouTube'])
+    setFormat('')
+    setTargets([])
     setEncargo(null)
     setApproved(false)
     setPreview(null)
@@ -1112,7 +1193,7 @@ function App({ api = realApi }) {
   }
 
   const closeChange = useCallback(() => setChangeOpen(false), [])
-  const ready = Boolean(account && !account.pending && platforms.length && (kind === 'edit' ? files.length : note.trim()))
+  const ready = Boolean(account && !account.pending && format && targets.length && (kind === 'edit' ? files.length : note.trim()))
   const tabbed = TABS.some((tab) => tab.id === screen)
 
   let view
@@ -1242,9 +1323,14 @@ function App({ api = realApi }) {
           )}
         </div>
       </Section>
-      <Section label="Dónde" id="label-platforms">
-        <PlatformChoices value={platforms} onChange={setPlatforms} />
+      <Section label="Formato" id="label-format">
+        <FormatChoices value={format} onChange={(next) => { setFormat(next); setTargets([]) }} />
       </Section>
+      {format && (
+        <Section label="Dónde" id="label-platforms">
+          <TargetChoices format={format} value={targets} onChange={setTargets} />
+        </Section>
+      )}
       <ErrorLine>{error}</ErrorLine>
       <p className="fine">Simuladores MOCK: nada sale a redes reales.</p>
     </>
@@ -1314,6 +1400,7 @@ function App({ api = realApi }) {
         )}
         {preparingLive && <p className="beat" aria-hidden="true" key={beat}>{beat}</p>}
         {preparingLive && <p className="sr-only" aria-live="polite">{statusLabel(status)}</p>}
+        {encargo && <p className="fine">{formatLabel(encargo.format)} · {targetText(encargo)}</p>}
         <p className="fine">{hint}</p>
         <ErrorLine>{error}</ErrorLine>
       </>
@@ -1397,9 +1484,10 @@ function App({ api = realApi }) {
         <Heading eyebrow="Estado: cancelado">Encargo <em>cancelado</em></Heading>
         <Badge variant="secondary" className="status-pill"><XCircle aria-hidden="true" />Cancelado</Badge>
         <p className="lead">Ya no se preparará ni se publicará en la simulación.</p>
-        {encargo?.platforms?.length > 0 && (
+        {encargo && (
           <dl className="ticket">
-            <div><dt>Plataformas</dt><dd>{platformLabel(encargo.platforms.join(','))}</dd></div>
+            <div><dt>Formato</dt><dd>{formatLabel(encargo.format)}</dd></div>
+            <div><dt>Destinos</dt><dd>{targetText(encargo)}</dd></div>
             <div><dt>Estado</dt><dd>cancelado</dd></div>
           </dl>
         )}
@@ -1425,7 +1513,8 @@ function App({ api = realApi }) {
         <div className="stamp" aria-hidden="true"><Check /></div>
         <Heading eyebrow="Simulación terminada">¡Corten! <em>{later ? 'Queda programado.' : 'Está publicado.'}</em></Heading>
         <dl className="ticket">
-          <div><dt>Plataformas</dt><dd>{platformLabel((result?.platforms ?? []).join(','))}</dd></div>
+          <div><dt>Formato</dt><dd>{formatLabel(result?.format ?? encargo?.format)}</dd></div>
+          <div><dt>Destinos</dt><dd>{targetText(result?.targets ? result : encargo)}</dd></div>
           <div><dt>Hora</dt><dd>{scheduledTime}</dd></div>
           <div><dt>Racha</dt><dd><Flame aria-hidden="true" />{days(streaks[account?.id] ?? 1)}</dd></div>
         </dl>
@@ -1467,6 +1556,7 @@ function App({ api = realApi }) {
                 <button type="button" className="encargo-open" aria-busy={openingId === item.id || undefined} disabled={openingId === item.id} onClick={() => openListed(item)}>
                   <span>
                     <strong className="encargo-title">{encargoTitle(item)}</strong>
+                    <span>{formatLabel(item.format)} · {targetText(item)}</span>
                     <span>
                       {(me?.accounts.length ?? 0) > 1 && `${item.account_name ?? account?.name ?? 'Cuenta'} · `}
                       Actualizado {formatWhen(item.updated_at ?? item.created_at, timeZone)}

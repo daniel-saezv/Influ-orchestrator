@@ -68,7 +68,7 @@ async function claimed(repo, kind = 'from_scratch') {
   });
   const created = await createEncargo(repo, {
     email: 'ana@example.com',
-    body: { account_id: guide.accounts[0].account_id, kind, note: kind === 'edit' ? null : 'una idea', platforms: ['youtube'] },
+    body: { account_id: guide.accounts[0].account_id, kind, note: kind === 'edit' ? null : 'una idea', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }] },
     now: NOW,
   });
   if (kind === 'from_scratch') await claimEncargo(repo, { encargoId: created.encargo_id, now: NOW });
@@ -113,6 +113,14 @@ test('preparar_subida reserva una vez, reutiliza la misma clave y rechaza otra d
   await assert.rejects(
     () => prepareDeliverableUpload(repo, { ...input, mime: 'text/plain' }),
     (error) => error.code === 'INVALID_INPUT',
+  );
+  await assert.rejects(
+    () => prepareDeliverableUpload(repo, { ...input, mime: 'image/jpeg' }),
+    (error) => error.code === 'DELIVERABLE_FORMAT_MISMATCH',
+  );
+  await assert.rejects(
+    () => prepareDeliverableUpload(repo, { ...input, mime: 'audio/mpeg' }),
+    (error) => error.code === 'DELIVERABLE_FORMAT_MISMATCH',
   );
   await assert.rejects(
     () => prepareDeliverableUpload(repo, { ...input, sizeBytes: MAX_FILE_BYTES + 1 }),
@@ -169,7 +177,7 @@ test('una reserva caducada suelta la cuota y el resultado solo enlaza la clave e
   const bytes = new Uint8Array([9, 8, 7, 6, 5, 4, 3, 2]);
   const sha = createHash('sha256').update(bytes).digest('hex');
   const input = {
-    encargoId, sha256: sha, contentMd5: md5(bytes), mime: 'image/png', sizeBytes: bytes.byteLength, now: NOW, signer,
+    encargoId, sha256: sha, contentMd5: md5(bytes), mime: 'video/mp4', sizeBytes: bytes.byteLength, now: NOW, signer,
   };
   const minted = await prepareDeliverableUpload(repo, input);
   shim._raw.prepare('UPDATE deliverable_reservations SET expires_at = ? WHERE r2_key = ?').run('2026-11-19T12:00:00.000Z', minted.r2_key);
@@ -183,12 +191,12 @@ test('una reserva caducada suelta la cuota y el resultado solo enlaza la clave e
 
   const free = await submitEncargoResult(repo, {
     encargoId, now: '2026-11-19T12:00:02.000Z', r2: store,
-    body: { synthetic: true, content_hash: HASH, deliverable: { r2_key: 'out/libre', sha256: sha, mime: 'image/png', size_bytes: 8 } },
+    body: { synthetic: true, content_hash: HASH, deliverable: { r2_key: 'out/libre', sha256: sha, mime: 'video/mp4', size_bytes: 8 } },
   }).catch((error) => error);
   assert.equal(free.code, 'INVALID_INPUT');
   assert.equal((await repo.encargoById(encargoId)).status, 'claimed');
 
-  seedObject(r2, renewed.r2_key, new Uint8Array([1]), { contentType: 'image/png' });
+  seedObject(r2, renewed.r2_key, new Uint8Array([1]), { contentType: 'video/mp4' });
   const mismatch = await submitEncargoResult(repo, {
     encargoId, now: '2026-11-19T12:00:03.000Z', r2: store,
     body: { synthetic: true, content_hash: HASH, deliverable: { r2_key: renewed.r2_key } },
@@ -196,7 +204,7 @@ test('una reserva caducada suelta la cuota y el resultado solo enlaza la clave e
   assert.equal(mismatch.code, 'INTEGRITY_ERROR');
   assert.equal((await repo.encargoById(encargoId)).status, 'claimed');
 
-  seedObject(r2, renewed.r2_key, bytes, { contentType: 'image/png' });
+  seedObject(r2, renewed.r2_key, bytes, { contentType: 'video/mp4' });
   const ready = await submitEncargoResult(repo, {
     encargoId, now: '2026-11-19T12:00:04.000Z', r2: store,
     body: { synthetic: true, content_hash: HASH, deliverable: { r2_key: renewed.r2_key, sha256: 'ff'.repeat(32), mime: 'text/plain', size_bytes: 1 } },
@@ -205,7 +213,7 @@ test('una reserva caducada suelta la cuota y el resultado solo enlaza la clave e
   assert.equal(await repo.storedBytes('global'), bytes.byteLength);
   const asset = shim._raw.prepare('SELECT sha256, mime, size_bytes, content_md5 FROM encargo_assets WHERE r2_key = ?').get(renewed.r2_key);
   assert.equal(asset.sha256, sha);
-  assert.equal(asset.mime, 'image/png');
+  assert.equal(asset.mime, 'video/mp4');
   assert.equal(Number(asset.size_bytes), bytes.byteLength);
   assert.equal(asset.content_md5, input.contentMd5);
 
@@ -236,7 +244,7 @@ test('leer_origen solo firma encargos reclamados y cuenta una clase B por GET', 
   });
   const created = await createEncargo(repo, {
     email: 'ana@example.com',
-    body: { account_id: guide.accounts[0].account_id, kind: 'edit', platforms: ['youtube'] },
+    body: { account_id: guide.accounts[0].account_id, kind: 'edit', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }] },
     now: NOW,
   });
   const user = await repo.userByEmail('ana@example.com');

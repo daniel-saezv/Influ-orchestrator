@@ -139,7 +139,7 @@ test('MCP con bearer: herramientas de la cola y ninguna de aprobar o publicar', 
   const created = await workerMod.fetch(new Request('https://local.test/v1/me/encargos', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'cf-access-jwt-assertion': person },
-    body: JSON.stringify({ account_id: accountId, kind: 'from_scratch', note: 'un plano del puerto', platforms: ['youtube'] }),
+    body: JSON.stringify({ account_id: accountId, kind: 'from_scratch', note: 'un plano del puerto', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }] }),
   }), dbEnv);
   const createdBody = await created.json();
   assert.equal(createdBody.data.status, 'queued');
@@ -180,9 +180,22 @@ test('MCP con bearer: herramientas de la cola y ninguna de aprobar o publicar', 
     arguments: { encargo_id: encargoId },
   });
   const claimText = claim.messages.flatMap((message) => message.result?.content ?? []).map((part) => part.text).join('');
-  assert.equal(JSON.parse(claimText).status, 'claimed');
+  const claimBody = JSON.parse(claimText);
+  assert.equal(claimBody.status, 'claimed');
+  assert.equal(claimBody.encargo.format, 'short_video');
+  assert.deepEqual(claimBody.encargo.targets, [{ platform: 'youtube', target: 'short' }]);
 
   const hash = 'ab'.repeat(32);
+  const wrongMime = await rpc(dbEnv, MCP_TOKEN, 'tools/call', {
+    name: 'preparar_subida',
+    arguments: {
+      encargo_id: encargoId, sha256: hash, content_md5: '1B2M2Y8AsgTpgAmY7PhCfg==', mime: 'image/jpeg', size_bytes: 8,
+    },
+  });
+  const wrongText = wrongMime.messages.flatMap((message) => message.result?.content ?? []).map((part) => part.text).join('');
+  assert.equal(wrongMime.messages.some((message) => message.result?.isError), true);
+  assert.equal(JSON.parse(wrongText).code, 'DELIVERABLE_FORMAT_MISMATCH');
+
   const missingSign = await rpc(dbEnv, MCP_TOKEN, 'tools/call', {
     name: 'preparar_subida',
     arguments: {
@@ -202,6 +215,8 @@ test('MCP con bearer: herramientas de la cola y ninguna de aprobar o publicar', 
   });
   const originBody = JSON.parse(origin.messages.flatMap((message) => message.result?.content ?? []).map((part) => part.text).join(''));
   assert.equal(originBody.note, 'un plano del puerto');
+  assert.equal(originBody.format, 'short_video');
+  assert.deepEqual(originBody.targets, [{ platform: 'youtube', target: 'short' }]);
   assert.equal(originBody.assets.length, 0);
   assert.equal(JSON.stringify(originBody).includes('ana@example.com'), false);
 
@@ -242,7 +257,7 @@ test('webhook ausente no llama y un webhook que falla no bloquea la cola', async
       body: JSON.stringify({ display_name: 'Ana', time_zone: 'Europe/Madrid' }),
     }), quiet);
     const accountId = (await guide.json()).data.accounts[0].account_id;
-    const absent = await post(quiet, { account_id: accountId, kind: 'from_scratch', note: 'sin webhook', platforms: ['youtube'] });
+    const absent = await post(quiet, { account_id: accountId, kind: 'from_scratch', note: 'sin webhook', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }] });
     const absentBody = await absent.json();
     assert.equal(absent.status, 200);
     assert.equal(absentBody.data.status, 'queued');
@@ -258,7 +273,7 @@ test('webhook ausente no llama y un webhook que falla no bloquea la cola', async
       body: JSON.stringify({ display_name: 'Ana', time_zone: 'Europe/Madrid' }),
     }), failing);
     const account2 = (await guide2.json()).data.accounts[0].account_id;
-    const blocked = await post(failing, { account_id: account2, kind: 'from_scratch', note: 'webhook caído', platforms: ['instagram'] });
+    const blocked = await post(failing, { account_id: account2, kind: 'from_scratch', note: 'webhook caído', format: 'short_video', targets: [{ platform: 'instagram', target: 'reel' }] });
     const blockedBody = await blocked.json();
     assert.equal(blocked.status, 200);
     assert.equal(blockedBody.data.status, 'queued');
@@ -271,7 +286,7 @@ test('webhook ausente no llama y un webhook que falla no bloquea la cola', async
     const queued = await repo.listQueuedEncargos();
     assert.equal(queued.some((row) => row.encargo_id === blockedBody.data.encargo_id), true);
 
-    const editDraft = await post(failing, { account_id: account2, kind: 'edit', platforms: ['youtube'] });
+    const editDraft = await post(failing, { account_id: account2, kind: 'edit', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }] });
     const editBody = await editDraft.json();
     assert.equal(editDraft.status, 200);
     assert.equal(editBody.data.status, 'draft');
@@ -341,7 +356,7 @@ test('la revisión de respaldo registra la cola una vez al día y no reclama', a
       method: 'POST',
       headers: { 'content-type': 'application/json', 'cf-access-jwt-assertion': person },
       body: JSON.stringify({
-        account_id: me.data.accounts[0].account_id, kind: 'from_scratch', note: 'en cola', platforms: ['tiktok'],
+        account_id: me.data.accounts[0].account_id, kind: 'from_scratch', note: 'en cola', format: 'short_video', targets: [{ platform: 'tiktok', target: 'video' }],
       }),
     }), dbEnv)).json();
 

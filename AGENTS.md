@@ -20,7 +20,7 @@ JavaScript ESM (`"type": "module"`), Node `>=22` (las pruebas usan `node:sqlite`
 | `src/worker.js` | `fetch` + `scheduled`. |
 | `bot/` | CLI de Grok Bot (`bot/influ.mjs`) y cliente HMAC. |
 | `content/batches/` | Lotes. `LOTE-0001` es el ejemplo. |
-| `migrations/` | SQL de D1 (`0001`–`0006`). |
+| `migrations/` | SQL de D1 (`0001`–`0008`). |
 | `n8n/` | Plantillas WF-01..04 importables. No hay instancia n8n; no se ejecutan en CI. |
 | `deploy/` | Guardia de modo mock, sincronización D1, smoke de `/v1/health` y el generador legacy `build.mjs`. |
 | `tests/` | Unitarios (`node:test`) y aceptación local/remota. El shim D1 está en `tests/helpers/d1-shim.mjs`. |
