@@ -1219,7 +1219,7 @@ function App({ api = realApi }) {
               <li key={item.id} className="encargo-row">
                 <button type="button" className="encargo-open" onClick={() => openListed(item)}>
                   <span>
-                    <strong>{encargoTitle(item)}</strong>
+                    <strong className="encargo-title">{encargoTitle(item)}</strong>
                     <span>
                       {(me?.accounts.length ?? 0) > 1 && `${item.account_name ?? account?.name ?? 'Cuenta'} · `}
                       Actualizado {formatWhen(item.updated_at ?? item.created_at)}

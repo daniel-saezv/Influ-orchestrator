@@ -161,6 +161,26 @@ describe('mobile creation flow', () => {
     expect(getFakeApiState().encargos.at(-1).status).toBe('cancelled')
   })
 
+  it('truncates a long encargo title without hiding cancel on narrow layouts', async () => {
+    resetFakeApi({ onboarded: true })
+    configureFakeApi({ transitionReads: 100 })
+    const longNote = 'En un bar casual con un anuncio publicitario distinto que empuja el layout si no se recorta en móvil'
+    const user = userEvent.setup()
+    render(<App api={fakeApi} />)
+
+    await user.click(await screen.findByRole('button', { name: 'Mis encargos' }))
+    await user.click(screen.getByRole('button', { name: 'Preparar el primero' }))
+    await user.type(screen.getByLabelText('Tu idea'), longNote)
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    await user.click(await screen.findByRole('button', { name: 'Mis encargos' }))
+
+    const title = await screen.findByText(longNote)
+    expect(title).toHaveClass('encargo-title')
+    const row = title.closest('li')
+    expect(row?.querySelector('.encargo-open')).toBeTruthy()
+    expect(within(row).getByRole('button', { name: 'Cancelar encargo' })).toBeInTheDocument()
+  })
+
   it('does not poll an encargo while the page is hidden', async () => {
     resetFakeApi({ onboarded: true })
     configureFakeApi({ transitionReads: 100 })
