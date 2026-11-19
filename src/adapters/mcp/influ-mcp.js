@@ -59,14 +59,16 @@ export function createInfluServer(env) {
 
   server.registerTool('reclamar_encargo', {
     title: 'Reclamar encargo',
-    description: 'Reserva un encargo que está en la cola. No aprueba ni publica.',
+    description: 'Reserva un encargo que está en la cola y devuelve el campo origin con la misma información que leer_origen: nota, metadatos y, por cada archivo de origen, URL de descarga prefirmada (10 minutos), SHA-256, mime y tamaño. Tras reclamar no hace falta llamar a leer_origen si usas origin. Las URLs son un secreto de corta vida: no las muestres en el chat ni las escribas en logs. No aprueba ni publica.',
     inputSchema: z.object({ encargo_id: encargoId }),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-  }, async ({ encargo_id: id }) => runTool(() => claimEncargo(repo, { encargoId: id, now: now(), actor: MCP_ACTOR })));
+  }, async ({ encargo_id: id }) => runTool(() => claimEncargo(repo, {
+    encargoId: id, now: now(), actor: MCP_ACTOR, r2, signer, env: workerEnv, withOrigin: true,
+  })));
 
   server.registerTool('leer_origen', {
     title: 'Leer origen',
-    description: 'Lee la nota de un encargo ya reclamado y, por cada origen, una URL de descarga que caduca a los 10 minutos. La URL es un secreto de corta vida: no la muestres en el chat ni la escribas en logs. No devuelve bytes. No aprueba ni publica.',
+    description: 'Para un encargo ya reclamado sin el campo origin de reclamar_encargo, o para volver a firmar. Devuelve la nota y, por cada origen, URL de descarga (10 minutos), SHA-256, mime y tamaño. La URL es un secreto de corta vida: no la muestres en el chat ni la escribas en logs. No devuelve bytes. No aprueba ni publica.',
     inputSchema: z.object({ encargo_id: encargoId }),
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   }, async ({ encargo_id: id }) => runTool(() => readClaimedOrigin(repo, {

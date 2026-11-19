@@ -10,7 +10,7 @@ import { assertEncargoSelection } from '../core/domain/formats.js';
 import { MAX_CLASS_B_GLOBAL, MAX_CLASS_B_USER } from '../core/domain/r2-quota.js';
 import { PRESIGN_TTL_SECONDS, signingUnavailableError } from '../adapters/storage/r2-presign.js';
 import { deleteAssetObjects } from './r2-gc.js';
-import { completeUpload, createUpload } from './uploads.js';
+import { completeUpload, createUpload, etagMatches } from './uploads.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NOT_FOUND = () => err('NOT_FOUND', 'No encontrado', 404);
@@ -43,10 +43,25 @@ function publicUser(user, accounts) {
   };
 }
 
-function publicEncargo(row, assets = []) {
-  const deliverable = assets
+function currentDeliverable(row, assets = []) {
+  return assets
     .filter((asset) => asset.role === 'deliverable' && asset.version === row.version && !asset.delete_pending)
     .at(-1);
+}
+
+function encargoEtag(row, assets = []) {
+  const deliverable = currentDeliverable(row, assets);
+  return `"${row.updated_at}:${row.version}:${row.status}:${row.content_hash ?? ''}:${deliverable?.sha256 ?? ''}"`;
+}
+
+const PERSON_JSON_HEADERS = {
+  'content-type': 'application/json; charset=utf-8',
+  'cache-control': 'no-store',
+  'x-influ-mode': 'mock',
+};
+
+function publicEncargo(row, assets = []) {
+  const deliverable = currentDeliverable(row, assets);
   return {
     encargo_id: row.encargo_id,
     account_id: row.account_id,
@@ -152,12 +167,36 @@ export async function createEncargo(repo, { email, body, now }) {
 export async function listEncargos(repo, { email, now }) {
   await repo.ensureUser(email, now);
   const rows = await repo.listEncargosForEmail(email);
-  return { encargos: rows.map((row) => publicEncargo(row)) };
+  const deliverables = await repo.listCurrentDeliverablesForEmail(email);
+  const assetsByEncargo = new Map();
+  for (const asset of deliverables) {
+    const bucket = assetsByEncargo.get(asset.encargo_id);
+    if (bucket) bucket.push(asset);
+    else assetsByEncargo.set(asset.encargo_id, [asset]);
+  }
+  return { encargos: rows.map((row) => publicEncargo(row, assetsByEncargo.get(row.encargo_id) ?? [])) };
+}
+
+async function loadPublicEncargo(repo, email, encargoId) {
+  const encargo = await requireOwnedEncargo(repo, email, encargoId);
+  const assets = await repo.listPreviewAssets(encargo.encargo_id, encargo.version);
+  return { encargo, assets, data: publicEncargo(encargo, assets) };
 }
 
 export async function getEncargo(repo, { email, encargoId }) {
-  const encargo = await requireOwnedEncargo(repo, email, encargoId);
-  return publicEncargo(encargo, await repo.listPreviewAssets(encargo.encargo_id, encargo.version));
+  return (await loadPublicEncargo(repo, email, encargoId)).data;
+}
+
+export async function getEncargoHttpResponse(repo, { email, encargoId, request }) {
+  const { encargo, assets, data } = await loadPublicEncargo(repo, email, encargoId);
+  const etag = encargoEtag(encargo, assets);
+  if (etagMatches(request?.headers?.get?.('if-none-match'), etag)) {
+    return new Response(null, { status: 304, headers: { etag, ...PERSON_JSON_HEADERS } });
+  }
+  return new Response(JSON.stringify({ ok: true, data }), {
+    status: 200,
+    headers: { etag, ...PERSON_JSON_HEADERS },
+  });
 }
 
 async function assertBatchHash(repo, batchId) {
@@ -419,7 +458,9 @@ export async function readClaimedOrigin(repo, { encargoId, now, r2, signer = nul
   };
 }
 
-export async function claimEncargo(repo, { encargoId, now, actor = 'grok-bot' }) {
+export async function claimEncargo(repo, {
+  encargoId, now, actor = 'grok-bot', withOrigin = false, r2 = null, signer = null, env = null,
+}) {
   if (!UUID_RE.test(encargoId ?? '')) throw NOT_FOUND();
   const ok = await repo.claimEncargo(encargoId, now);
   if (!ok) {
@@ -429,7 +470,11 @@ export async function claimEncargo(repo, { encargoId, now, actor = 'grok-bot' })
   }
   const encargo = await botEncargo(repo, encargoId);
   await repo.audit(actor, 'ENCARGO_CLAIMED', null, { encargo_id: encargoId, account_id: encargo.account_id }, now);
-  return { encargo_id: encargoId, status: 'claimed', encargo };
+  const result = { encargo_id: encargoId, status: 'claimed', encargo };
+  if (withOrigin) {
+    result.origin = await readClaimedOrigin(repo, { encargoId, now, r2, signer, env, actor });
+  }
+  return result;
 }
 
 function failureMessage(code) {

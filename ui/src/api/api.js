@@ -11,7 +11,17 @@ function failure(response, message) {
   }
 }
 
+const encargoSnapshots = new Map()
+
 async function jsonResponse(response) {
+  if (response.status === 304) {
+    return {
+      ok: true,
+      status: 304,
+      notModified: true,
+      etag: response.headers.get('etag'),
+    }
+  }
   let payload
   try {
     payload = await response.json()
@@ -25,7 +35,8 @@ async function jsonResponse(response) {
       error: payload?.error ?? { code: 'HTTP_ERROR', message: `La petición ha fallado (${response.status}).` },
     }
   }
-  return { ...payload, ok: true, status: response.status }
+  const etag = response.headers.get('etag')
+  return { ...payload, ok: true, status: response.status, ...(etag ? { etag } : {}) }
 }
 
 async function request(path, { method = 'GET', body, headers, ...options } = {}) {
@@ -131,10 +142,20 @@ export async function listEncargos() {
 }
 
 export async function getEncargo(encargoId) {
-  return mapResponse(
-    await request(`/v1/me/encargos/${encoded(encargoId)}`),
-    mapEncargo,
-  )
+  const id = String(encargoId)
+  const cached = encargoSnapshots.get(id)
+  const headers = cached?.etag ? { 'If-None-Match': cached.etag } : undefined
+  const raw = await request(`/v1/me/encargos/${encoded(id)}`, headers ? { headers } : undefined)
+  if (raw.ok && raw.notModified) {
+    if (!cached?.data) return failure({ status: 304 }, 'La versión en caché ya no es válida.')
+    return { ok: true, status: 304, notModified: true, etag: raw.etag, data: mapEncargo(cached.data) }
+  }
+  if (raw.ok && raw.data) {
+    const etag = raw.etag
+    if (etag) encargoSnapshots.set(id, { etag, data: raw.data })
+    return mapResponse(raw, mapEncargo)
+  }
+  return raw
 }
 
 export async function getMedia(sha256) {

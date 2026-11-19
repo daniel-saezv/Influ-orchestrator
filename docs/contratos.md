@@ -110,8 +110,12 @@ JSON `{ "sha256": "hex del archivo entero" }`. Exige todas las partes. No llama 
 `GET /v1/me/encargos`. JWT de Access, el mismo aislamiento que el resto de `/v1/me`: solo los encargos de las cuentas de ese correo, del más reciente al más antiguo, como máximo 100. `200`:
 
 ```json
-{ "ok": true, "data": { "encargos": [{ "encargo_id": "uuid", "account_id": "uuid", "account_name": "Ana", "status": "queued", "kind": "from_scratch", "note": "idea", "format": "short_video", "targets": [{ "platform": "youtube", "target": "short" }], "platforms": ["youtube"], "legacy": false, "version": 1, "created_at": "2026-11-19T12:00:00.000Z", "updated_at": "2026-11-19T12:00:00.000Z" }] } }
+{ "ok": true, "data": { "encargos": [{ "encargo_id": "uuid", "account_id": "uuid", "account_name": "Ana", "status": "ready", "kind": "from_scratch", "note": "idea", "format": "short_video", "targets": [{ "platform": "youtube", "target": "short" }], "platforms": ["youtube"], "legacy": false, "version": 1, "preview": { "sha256": "hex", "mime": "video/mp4", "size_bytes": 1000, "version": 1, "media_url": "/v1/me/media/hex" }, "created_at": "2026-11-19T12:00:00.000Z", "updated_at": "2026-11-19T12:00:00.000Z" }] } }
 ```
+
+Cada ítem lleva `preview` solo si existe una pieza entregable de la versión actual (mismos campos que el detalle). No se lee R2 al listar.
+
+`GET /v1/me/encargos/:id` responde con cabecera `etag` derivada de `updated_at`, versión, estado, `content_hash` y huella de la previa. Un `If-None-Match` coincidente devuelve 304 sin cuerpo JSON aunque el Worker siga consultando D1.
 
 `POST /v1/me/encargos` exige `format` (`image`, `carousel`, `short_video` o `video`) y `targets` (un `{ platform, target }` por red, solo combinaciones compatibles). `platforms` lo calcula el servidor. Un encargo de antes de la migración 0008 se lee con `format: null`, `targets: null` y `legacy: true`.
 
@@ -133,7 +137,7 @@ HMAC `bot` (nonce anti-replay). La clave del aprobador recibe 403. No lista usua
 { "synthetic": true, "content_hash": "hex", "file_sha256": "hex del archivo", "batch_id": "opcional", "deliverable": { "r2_key": "out/…" } }
 ```
 
-`preparar_subida` admite `image/*` o `video/*`. Si el mime no es el del formato del encargo, responde 400 `DELIVERABLE_FORMAT_MISMATCH`. El audio ya no es una pieza; una reserva antigua de audio sigue pudiendo caducar. `reclamar_encargo` y `leer_origen` incluyen `format`, `targets` y `legacy`.
+`preparar_subida` admite `image/*` o `video/*`. Si el mime no es el del formato del encargo, responde 400 `DELIVERABLE_FORMAT_MISMATCH`. El audio ya no es una pieza; una reserva antigua de audio sigue pudiendo caducar. `reclamar_encargo` (MCP) incluye `origin` con el mismo cuerpo que `leer_origen`; `leer_origen` y `origin` incluyen `format`, `targets` y `legacy`.
 
 `deliverable.r2_key` tiene que ser una reserva emitida por `preparar_subida` para ese encargo. El Worker hace `head`: el objeto existe, el tamaño es el reservado y `checksums.md5` es el `Content-MD5` firmado. El head de la pieza cuenta una clase B. Entonces enlaza la pieza con el SHA-256, el MIME y el tamaño de esa reserva. Una clave libre, o un objeto que no cuadra, no pasa el encargo a `ready`. `file_sha256` es obligatorio si hay partes de origen. Desde cero, `synthetic` tiene que ser true. La respuesta 200 deja el encargo en `ready` y escribe `audit_log` con `account_id`.
 

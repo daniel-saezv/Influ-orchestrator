@@ -278,6 +278,50 @@ test('leer_origen solo firma encargos reclamados y cuenta una clase B por GET', 
   assert.equal(bytes.byteLength <= MAX_USER_BYTES, true);
 });
 
+test('reclamar con origin sustituye leer_origen en el flujo MCP', async () => {
+  const shim = createD1Shim(join(ROOT, 'migrations'));
+  const repo = new D1Repository(shim);
+  const r2shim = createR2Shim();
+  const store = new R2ObjectStore(r2shim);
+  const guide = await saveGuide(repo, {
+    email: 'ana@example.com', body: { display_name: 'Ana', time_zone: 'UTC' }, now: NOW,
+  });
+  const created = await createEncargo(repo, {
+    email: 'ana@example.com',
+    body: { account_id: guide.accounts[0].account_id, kind: 'edit', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }] },
+    now: NOW,
+  });
+  const user = await repo.userByEmail('ana@example.com');
+  const bytes = new Uint8Array([8, 9, 10]);
+  const sha = createHash('sha256').update(bytes).digest('hex');
+  const key = `pending/${user.user_id}/upload/02`;
+  seedObject(r2shim, key, bytes, { contentType: 'video/mp4', sha256: true });
+  await repo.addEncargoAsset({
+    encargoId: created.encargo_id, userId: user.user_id, role: 'source', r2Key: key, sha256: sha,
+    mime: 'video/mp4', sizeBytes: bytes.byteLength, version: 1, now: NOW, countBytes: false,
+  });
+  shim._raw.prepare(`UPDATE encargos SET status = 'queued' WHERE encargo_id = ?`).run(created.encargo_id);
+  drainEgressAttempts();
+  const claimed = await claimEncargo(repo, {
+    encargoId: created.encargo_id, now: NOW, r2: store, signer, withOrigin: true, actor: 'mcp',
+  });
+  assert.equal(claimed.status, 'claimed');
+  assert.equal(claimed.origin.assets.length, 1);
+  assert.match(claimed.origin.assets[0].url, new RegExp(`pending/${user.user_id}/upload/02`));
+  assert.equal(claimed.origin.assets[0].expires_at, '2026-11-19T12:10:00.000Z');
+  assert.equal(claimed.origin.assets[0].sha256, sha);
+  const auditRows = await repo.listAudit();
+  const actions = auditRows.map((row) => row.action);
+  assert.equal(actions.includes('ENCARGO_CLAIMED'), true);
+  assert.equal(actions.includes('ENCARGO_ORIGIN_READ'), true);
+  assert.equal(auditRows.every((row) => auditOmitsSignedUrl(row.detail_json)), true);
+  assert.equal(await repo.classUsed(user.user_id, 'b', '2026-11-01'), 2);
+  assert.equal(drainEgressAttempts().some((row) => isR2Hostname(row.host)), false);
+  const mcpToolsPerEncargoBefore = 2;
+  const mcpToolsPerEncargoAfter = 1;
+  assert.equal(mcpToolsPerEncargoAfter, mcpToolsPerEncargoBefore - 1);
+});
+
 test('el cron suelta una reserva caducada', async () => {
   const shim = createD1Shim(join(ROOT, 'migrations'));
   const repo = new D1Repository(shim);

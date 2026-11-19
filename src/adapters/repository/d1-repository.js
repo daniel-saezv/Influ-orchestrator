@@ -318,6 +318,16 @@ export class D1Repository {
     return r.results;
   }
 
+  async listCurrentDeliverablesForEmail(email) {
+    const r = await this.db.prepare(`SELECT s.encargo_id, s.role, s.sha256, s.mime, s.size_bytes, s.version, s.delete_pending
+      FROM encargo_assets s
+      JOIN encargos e ON e.encargo_id = s.encargo_id AND s.version = e.version
+      JOIN accounts a ON a.account_id = e.account_id
+      JOIN users u ON u.user_id = a.user_id
+      WHERE u.email = ? AND s.role = 'deliverable' AND s.delete_pending = 0`).bind(email).all();
+    return r.results;
+  }
+
   async listSourceAssets(encargoId) {
     const r = await this.db.prepare(`SELECT role, r2_key, sha256, mime, size_bytes, version
       FROM encargo_assets
