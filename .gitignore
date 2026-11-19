@@ -1,3 +1,6 @@
+.agents/skills/design-taste-frontend/
+.agents/skills/high-end-visual-design/
+
 node_modules/
 .wrangler/
 .secrets/
