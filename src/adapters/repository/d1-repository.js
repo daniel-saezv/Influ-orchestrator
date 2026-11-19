@@ -735,15 +735,19 @@ export class D1Repository {
   }
 
   async recordPart(uploadId, part, info, now) {
-    const row = await this.db.prepare('SELECT part_hashes_json FROM upload_sessions WHERE upload_id = ?').bind(uploadId).first();
-    const parts = JSON.parse(row?.part_hashes_json || '{}');
     const key = String(part);
-    if (parts[key]) return parts[key].sha256 === info.sha256 ? 'same' : 'conflict';
-    parts[key] = info;
-    const received = Object.keys(parts).length;
-    const res = await this.db.prepare(`UPDATE upload_sessions SET part_hashes_json = ?, received_parts = ?, updated_at = ? WHERE upload_id = ? AND part_hashes_json = ?`)
-      .bind(JSON.stringify(parts), received, now, uploadId, row.part_hashes_json).run();
-    return res.meta.changes === 1 ? 'saved' : 'retry';
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const row = await this.db.prepare('SELECT part_hashes_json FROM upload_sessions WHERE upload_id = ?').bind(uploadId).first();
+      if (!row) return 'conflict';
+      const parts = JSON.parse(row.part_hashes_json || '{}');
+      if (parts[key]) return parts[key].sha256 === info.sha256 ? 'same' : 'conflict';
+      parts[key] = info;
+      const received = Object.keys(parts).length;
+      const res = await this.db.prepare(`UPDATE upload_sessions SET part_hashes_json = ?, received_parts = ?, updated_at = ? WHERE upload_id = ? AND part_hashes_json = ?`)
+        .bind(JSON.stringify(parts), received, now, uploadId, row.part_hashes_json).run();
+      if (res.meta.changes === 1) return 'saved';
+    }
+    return 'retry';
   }
 
   async markUploadComplete({ uploadId, fileSha, now }) {

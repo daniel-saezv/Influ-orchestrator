@@ -26,7 +26,9 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react'
-import realApi, { sha256Hex } from './api/api.js'
+import realApi from './api/api.js'
+import { hashFile } from './lib/hash-file.js'
+import { uploadParts } from './lib/upload-parts.js'
 import { Badge } from './components/ui/badge.jsx'
 import { Button } from './components/ui/button.jsx'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './components/ui/empty.jsx'
@@ -673,6 +675,7 @@ function App({ api = realApi }) {
   const screenRef = useRef(screen)
   const listRequest = useRef(0)
   const fileInputRef = useRef(null)
+  const uploadAbortRef = useRef(null)
   const preparingLive = screen === 'preparing' && !uploading && encargo?.status !== 'failed' && encargo?.status !== 'draft'
   const beat = useBeat(
     encargo?.status === 'claimed' || encargo?.status === 'preparing' ? PREP_BEATS : QUEUE_BEATS,
@@ -1033,62 +1036,91 @@ function App({ api = realApi }) {
     setEncargo(activeEncargo)
     if (screenRef.current === 'encargos') loadEncargos()
     if (kind === 'edit') {
-      const totalParts = files.reduce((sum, file) => sum + Math.max(1, Math.ceil(file.size / PART_BYTES)), 0)
-      let sentParts = 0
-      for (const [fileIndex, source] of files.entries()) {
-        const interruptedId = fileIndex === 0 ? window.localStorage.getItem(UPLOAD_KEY) : null
-        const sourceSha256 = await sha256Hex(source)
-        const uploadBody = {
-          encargo_id: activeEncargo.id,
-          size_bytes: source.size,
-          mime: source.type || 'application/octet-stream',
-          sha256: sourceSha256,
-        }
-        let upload = await api.createUpload({ ...uploadBody, resume_id: interruptedId })
-        if (!upload.ok && interruptedId) {
-          window.localStorage.removeItem(UPLOAD_KEY)
-          upload = await api.createUpload(uploadBody)
-        }
-        if (!upload.ok) {
-          fail(upload.error.message)
-          return
-        }
-        if (upload.data.resumed && upload.data.encargo_id && upload.data.encargo_id !== activeEncargo.id) {
-          await api.cancelEncargo(activeEncargo.id)
-          const resumed = await api.getEncargo(upload.data.encargo_id)
-          if (!resumed.ok) {
-            fail(resumed.error.message)
+      const abort = new AbortController()
+      uploadAbortRef.current = abort
+      try {
+        const totalParts = files.reduce((sum, file) => sum + Math.max(1, Math.ceil(file.size / PART_BYTES)), 0)
+        let sentParts = 0
+        for (const [fileIndex, source] of files.entries()) {
+          if (abort.signal.aborted) return
+          const interruptedId = fileIndex === 0 ? window.localStorage.getItem(UPLOAD_KEY) : null
+          let hashed
+          try {
+            hashed = await hashFile(source, { partSize: PART_BYTES, signal: abort.signal })
+          } catch (error) {
+            if (abort.signal.aborted || error?.name === 'AbortError') return
+            fail('No se pudo leer el archivo.')
             return
           }
-          activeEncargo = resumed.data
-          setEncargo(activeEncargo)
-        }
-        const uploadSessionId = upload.data.upload_id
-        window.localStorage.setItem(UPLOAD_KEY, uploadSessionId)
-        const partCount = Math.ceil(source.size / PART_BYTES)
-        const uploadedParts = new Set(upload.data.uploaded_parts ?? [])
-        for (let index = 0; index < partCount; index += 1) {
-          if (!uploadedParts.has(index + 1)) {
-            const start = index * PART_BYTES
-            const part = source.slice(start, Math.min(start + PART_BYTES, source.size))
-            const uploaded = await api.uploadPart(uploadSessionId, index + 1, part)
-            if (!uploaded.ok) {
-              fail(uploaded.error.message)
+          const sourceSha256 = hashed.sha256
+          const uploadBody = {
+            encargo_id: activeEncargo.id,
+            size_bytes: source.size,
+            mime: source.type || 'application/octet-stream',
+            sha256: sourceSha256,
+          }
+          let upload = await api.createUpload({ ...uploadBody, resume_id: interruptedId })
+          if (abort.signal.aborted) return
+          if (!upload.ok && interruptedId) {
+            window.localStorage.removeItem(UPLOAD_KEY)
+            upload = await api.createUpload(uploadBody)
+          }
+          if (abort.signal.aborted) return
+          if (!upload.ok) {
+            fail(upload.error.message)
+            return
+          }
+          if (upload.data.resumed && upload.data.encargo_id && upload.data.encargo_id !== activeEncargo.id) {
+            await api.cancelEncargo(activeEncargo.id)
+            const resumed = await api.getEncargo(upload.data.encargo_id)
+            if (!resumed.ok) {
+              fail(resumed.error.message)
               return
             }
+            activeEncargo = resumed.data
+            setEncargo(activeEncargo)
           }
-          sentParts += 1
-          setUploadProgress(Math.round((sentParts / totalParts) * 100))
+          if (abort.signal.aborted) return
+          const uploadSessionId = upload.data.upload_id
+          window.localStorage.setItem(UPLOAD_KEY, uploadSessionId)
+          const partSize = upload.data.part_size || PART_BYTES
+          let uploaded
+          try {
+            uploaded = await uploadParts({
+              source,
+              partSize,
+              partHashes: partSize === PART_BYTES ? hashed.partHashes : null,
+              uploadedParts: new Set(upload.data.uploaded_parts ?? []),
+              signal: abort.signal,
+              uploadPart: (number, blob, sha256, options) => api.uploadPart(uploadSessionId, number, blob, sha256, options),
+              onPartDone: () => {
+                sentParts += 1
+                setUploadProgress(Math.round((sentParts / totalParts) * 100))
+              },
+            })
+          } catch (error) {
+            if (abort.signal.aborted || error?.name === 'AbortError') return
+            fail('No se pudo subir el archivo.')
+            return
+          }
+          if (abort.signal.aborted) return
+          if (!uploaded.ok) {
+            fail(uploaded.error.message)
+            return
+          }
+          const completed = await api.completeUpload(uploadSessionId, { sha256: sourceSha256 })
+          if (abort.signal.aborted) return
+          if (!completed.ok) {
+            fail(completed.error.message)
+            return
+          }
+          window.localStorage.removeItem(UPLOAD_KEY)
         }
-        const completed = await api.completeUpload(uploadSessionId, { sha256: sourceSha256 })
-        if (!completed.ok) {
-          fail(completed.error.message)
-          return
-        }
-        window.localStorage.removeItem(UPLOAD_KEY)
+        setUploading(false)
+        if (screenRef.current === 'encargos') loadEncargos()
+      } finally {
+        if (uploadAbortRef.current === abort) uploadAbortRef.current = null
       }
-      setUploading(false)
-      if (screenRef.current === 'encargos') loadEncargos()
     }
   }
 
@@ -1195,9 +1227,13 @@ function App({ api = realApi }) {
 
   const cancelActiveEncargo = async () => {
     if (!encargo?.id || busy) return
+    uploadAbortRef.current?.abort()
     tap()
     const cancelled = await run('cancel', () => api.cancelEncargo(encargo.id))
-    if (!cancelled) return
+    if (!cancelled) {
+      setUploading(false)
+      return
+    }
     setEncargo({ ...encargo, ...cancelled, id: cancelled.id ?? encargo.id })
     setApproved(false)
     setPreview(null)
