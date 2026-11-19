@@ -39,6 +39,9 @@ const platformLabel = (value) => String(value).split(',').map((item) => PLATFORM
 const MAX_FILE_BYTES = 150 * 1024 * 1024
 const PART_BYTES = 5 * 1024 * 1024
 const UPLOAD_KEY = 'influ-upload-session'
+const DRAFT_KEY = 'influ-studio-draft'
+const QUEUE_BEATS = ['En cola, en silencio…', 'El cuarto oscuro se prepara…', 'Tu toma espera turno…']
+const PREP_BEATS = ['Montando el ritmo…', 'Ajustando el encuadre…', 'Buscando el corte…', 'Afinando la luz…']
 const NON_CANCELLABLE_ENCARGO_STATUSES = new Set(['cancelled', 'scheduled'])
 const SAFE_PREVIEW_TYPES = new Set([
   'image/avif',
@@ -107,11 +110,11 @@ function pathFor(screen, encargoId) {
   return '/'
 }
 
-function formatWhen(value) {
+function formatWhen(value, timeZone) {
   if (!value) return 'Sin fecha'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return 'Sin fecha'
-  return date.toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' })
+  return date.toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short', timeZone })
 }
 
 function encargoTitle(item) {
@@ -121,6 +124,64 @@ function encargoTitle(item) {
 }
 
 const tap = () => window.navigator.vibrate?.(8)
+
+function motionOk() {
+  return !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+}
+
+function celebrate() {
+  if (!motionOk()) {
+    tap()
+    return
+  }
+  window.navigator.vibrate?.([12, 36, 18])
+}
+
+function writeSession(key, value) {
+  try {
+    if (value == null) sessionStorage.removeItem(key)
+    else sessionStorage.setItem(key, value)
+  } catch {
+    return false
+  }
+  return true
+}
+
+function readStudioDraft() {
+  try {
+    const raw = sessionStorage.getItem(DRAFT_KEY)
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    const platforms = Array.isArray(data?.platforms) ? data.platforms.filter((item) => PLATFORMS.includes(item)) : []
+    return {
+      kind: data?.kind === 'edit' ? 'edit' : 'from_scratch',
+      note: typeof data?.note === 'string' ? data.note.slice(0, 4000) : '',
+      platforms: platforms.length ? platforms : ['YouTube'],
+    }
+  } catch {
+    return null
+  }
+}
+
+function useBeat(lines, active) {
+  const signature = lines.join('\n')
+  const [index, setIndex] = useState(0)
+  const [seen, setSeen] = useState(signature)
+  if (seen !== signature) {
+    setSeen(signature)
+    setIndex(0)
+  }
+  useEffect(() => {
+    if (!active || lines.length < 2) return undefined
+    if (!motionOk()) return undefined
+    const id = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return
+      setIndex((current) => (current + 1) % lines.length)
+    }, 3200)
+    return () => window.clearInterval(id)
+  }, [active, lines, signature])
+  return lines[seen === signature ? index : 0] ?? ''
+}
 
 function Wordmark() {
   return (
@@ -166,6 +227,21 @@ function Section({ label, children, id }) {
 function ErrorLine({ children }) {
   if (!children) return null
   return <p className="error" role="alert">{children}</p>
+}
+
+function LoadError({ title, detail, onRetry }) {
+  return (
+    <Empty className="min-h-0 flex-none items-start rounded-2xl border border-dashed border-input p-6 text-left">
+      <EmptyHeader className="items-start text-left">
+        <EmptyMedia variant="icon"><XCircle /></EmptyMedia>
+        <EmptyTitle>{title}</EmptyTitle>
+        <EmptyDescription>{detail}</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent className="items-start">
+        <Button variant="outline" onClick={onRetry}><RotateCcw aria-hidden="true" data-icon="inline-start" />Reintentar</Button>
+      </EmptyContent>
+    </Empty>
+  )
 }
 
 function canCancelEncargo(status) {
@@ -310,15 +386,43 @@ function SwipeDeck({ disabled, onRight, onLeft, children }) {
 }
 
 function Sheet({ title, onClose, children }) {
+  const panelRef = useRef(null)
+  const opener = useRef(document.activeElement)
   useEffect(() => {
-    const onKey = (event) => event.key === 'Escape' && onClose()
+    const openerNode = opener.current
+    document.body.classList.add('sheet-open')
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const node = panelRef.current
+      if (!node) return
+      const items = [...node.querySelectorAll('button, [href], input, textarea, select, [tabindex]:not([tabindex="-1"])')].filter((item) => !item.disabled && item.tabIndex !== -1)
+      if (!items.length) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      document.body.classList.remove('sheet-open')
+      window.removeEventListener('keydown', onKey)
+      if (openerNode instanceof HTMLElement && document.contains(openerNode)) openerNode.focus()
+    }
   }, [onClose])
   return (
     <div className="sheet-layer">
       <button type="button" className="sheet-scrim" aria-label="Cerrar" tabIndex={-1} onClick={onClose} />
-      <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" ref={panelRef}>
         <span className="sheet-grip" aria-hidden="true" />
         <div className="sheet-head">
           <h2 id="sheet-title">{title}</h2>
@@ -381,10 +485,10 @@ function App({ api = realApi }) {
   const [accountId, setAccountId] = useState(null)
   const [streaks, setStreaks] = useState({})
   const [activity, setActivity] = useState(null)
-  const [kind, setKind] = useState('from_scratch')
-  const [note, setNote] = useState('')
+  const [kind, setKind] = useState(() => readStudioDraft()?.kind ?? 'from_scratch')
+  const [note, setNote] = useState(() => readStudioDraft()?.note ?? '')
   const [files, setFiles] = useState([])
-  const [platforms, setPlatforms] = useState(['YouTube'])
+  const [platforms, setPlatforms] = useState(() => readStudioDraft()?.platforms ?? ['YouTube'])
   const [encargo, setEncargo] = useState(null)
   const [encargos, setEncargos] = useState(null)
   const [approved, setApproved] = useState(false)
@@ -398,6 +502,11 @@ function App({ api = realApi }) {
   const [scheduleAt, setScheduleAt] = useState('')
   const [result, setResult] = useState(null)
   const [theme, setTheme] = useThemePreference()
+  const [arrive, setArrive] = useState(null)
+  const [encargosError, setEncargosError] = useState('')
+  const [activityError, setActivityError] = useState('')
+  const [activityNonce, setActivityNonce] = useState(0)
+  const [openingId, setOpeningId] = useState('')
   const installed = typeof window !== 'undefined' && window.matchMedia?.('(display-mode: standalone)')?.matches
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const account = me?.accounts.find((item) => item.id === accountId) ?? null
@@ -405,6 +514,12 @@ function App({ api = realApi }) {
   const meRef = useRef(null)
   const screenRef = useRef(screen)
   const listRequest = useRef(0)
+  const fileInputRef = useRef(null)
+  const preparingLive = screen === 'preparing' && !uploading && encargo?.status !== 'failed' && encargo?.status !== 'draft'
+  const beat = useBeat(
+    encargo?.status === 'claimed' || encargo?.status === 'preparing' ? PREP_BEATS : QUEUE_BEATS,
+    preparingLive,
+  )
 
   const syncRoute = useCallback((next, id, historyMode = 'push') => {
     const path = pathFor(next, id)
@@ -417,7 +532,11 @@ function App({ api = realApi }) {
   const go = useCallback((next, to = 'forward', historyMode = 'push') => {
     setDirection(to)
     setError('')
-    if (next === 'encargos') setEncargos(null)
+    if (next === 'encargos') {
+      setEncargos(null)
+      setEncargosError('')
+    }
+    if (next !== 'preview') setArrive(null)
     setScreen(next)
     screenRef.current = next
     window.scrollTo?.({ top: 0 })
@@ -433,6 +552,26 @@ function App({ api = realApi }) {
     const timer = window.setTimeout(() => setToast(null), 2600)
     return () => window.clearTimeout(timer)
   }, [toast])
+
+  useEffect(() => {
+    if (screen !== 'studio') return undefined
+    writeSession(DRAFT_KEY, JSON.stringify({ kind, note, platforms }))
+    return undefined
+  }, [screen, kind, note, platforms])
+
+  useEffect(() => {
+    if (arrive !== 'ready' || screen !== 'preview') return undefined
+    const timer = window.setTimeout(() => setArrive(null), motionOk() ? 1400 : 0)
+    return () => window.clearTimeout(timer)
+  }, [arrive, screen])
+
+  useEffect(() => {
+    const heading = document.querySelector('.phone .view h1')
+    if (!(heading instanceof HTMLElement)) return undefined
+    heading.tabIndex = -1
+    heading.focus({ preventScroll: true })
+    return undefined
+  }, [screen])
 
   const run = useCallback(async (label, operation) => {
     setBusy(label)
@@ -467,15 +606,18 @@ function App({ api = realApi }) {
     const requestId = ++listRequest.current
     const response = await api.listEncargos()
     if (requestId !== listRequest.current) return
-    if (response.ok) setEncargos(response.data.encargos)
-    else {
+    if (response.ok) {
+      setEncargos(response.data.encargos)
+      setEncargosError('')
+    } else {
       setEncargos([])
-      setError(response.error.message)
+      setEncargosError(response.error.message)
     }
   }, [api])
 
   const applyEncargo = useCallback(async (data, historyMode = 'push') => {
     encargoIdRef.current = data.id
+    setArrive(null)
     setEncargo(data)
     if (data.account_id) setAccountId(data.account_id)
     setApproved(data.status === 'approved' || data.status === 'scheduled')
@@ -546,16 +688,18 @@ function App({ api = realApi }) {
     let stopped = false
     api.getActivity(accountId).then((response) => {
       if (stopped) return
-      if (response.ok) setActivity(response.data.items)
-      else {
+      if (response.ok) {
+        setActivity(response.data.items)
+        setActivityError('')
+      } else {
         setActivity([])
-        setError(response.error.message)
+        setActivityError(response.error.message)
       }
     })
     return () => {
       stopped = true
     }
-  }, [api, screen, accountId])
+  }, [api, screen, accountId, activityNonce])
 
   useEffect(() => {
     encargoIdRef.current = encargo?.id ?? null
@@ -569,10 +713,12 @@ function App({ api = realApi }) {
     const requestId = ++listRequest.current
     api.listEncargos().then((response) => {
       if (stopped || requestId !== listRequest.current) return
-      if (response.ok) setEncargos(response.data.encargos)
-      else {
+      if (response.ok) {
+        setEncargos(response.data.encargos)
+        setEncargosError('')
+      } else {
         setEncargos([])
-        setError(response.error.message)
+        setEncargosError(response.error.message)
       }
     })
     return () => {
@@ -590,9 +736,11 @@ function App({ api = realApi }) {
       const route = readRoute()
       setDirection('back')
       setError('')
+      setArrive(null)
       if (route.name === 'encargos') {
         screenRef.current = 'encargos'
         setEncargos(null)
+        setEncargosError('')
         setScreen('encargos')
         return
       }
@@ -620,7 +768,10 @@ function App({ api = realApi }) {
   const openTab = (tab) => {
     if (tab === screen) return
     const order = TABS.map((item) => item.id)
-    if (tab === 'history') setActivity(null)
+    if (tab === 'history') {
+      setActivity(null)
+      setActivityError('')
+    }
     if (tab === 'profile') setName(me?.display_name ?? '')
     go(tab, order.indexOf(tab) < order.indexOf(screen) ? 'back' : 'forward')
   }
@@ -710,6 +861,7 @@ function App({ api = realApi }) {
       fail(created.error.message)
       return
     }
+    writeSession(DRAFT_KEY, null)
     let activeEncargo = created.data
     setEncargo(activeEncargo)
     if (screenRef.current === 'encargos') loadEncargos()
@@ -800,7 +952,8 @@ function App({ api = realApi }) {
         if (stopped) return
         if (media.ok) setPreview(media.data)
         else setPosterOnly(true)
-        tap()
+        setArrive('ready')
+        celebrate()
         go('preview')
       }
     }
@@ -865,6 +1018,7 @@ function App({ api = realApi }) {
 
   const cancelActiveEncargo = async () => {
     if (!encargo?.id || busy) return
+    tap()
     const cancelled = await run('cancel', () => api.cancelEncargo(encargo.id))
     if (!cancelled) return
     setEncargo({ ...encargo, ...cancelled, id: cancelled.id ?? encargo.id })
@@ -880,12 +1034,17 @@ function App({ api = realApi }) {
   }
 
   const openListed = async (item) => {
+    if (openingId) return
+    tap()
+    setOpeningId(item.id)
     const data = await run('open', () => api.getEncargo(item.id))
+    setOpeningId('')
     if (!data) return
     await applyEncargo(data)
   }
 
   const cancelListed = async (item) => {
+    tap()
     const cancelled = await run('cancel', () => api.cancelEncargo(item.id))
     if (!cancelled) return
     setEncargos((current) => current?.map((row) => (
@@ -896,6 +1055,7 @@ function App({ api = realApi }) {
 
   const requestChanges = async (event) => {
     event.preventDefault()
+    tap()
     const changed = await run('change', () => api.decideEncargo(encargo.id, {
       decision: 'changes',
       version: encargo.version,
@@ -912,7 +1072,30 @@ function App({ api = realApi }) {
     go('preparing', 'back')
   }
 
+  const copyText = async (value, okMessage) => {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value)
+      else {
+        const area = document.createElement('textarea')
+        area.value = value
+        area.setAttribute('readonly', '')
+        area.style.position = 'fixed'
+        area.style.left = '-9999px'
+        document.body.appendChild(area)
+        area.select()
+        const copied = document.execCommand('copy')
+        area.remove()
+        if (!copied) throw new Error('copy')
+      }
+      tap()
+      notify(okMessage)
+    } catch {
+      notify('No he podido copiarlo.', 'error')
+    }
+  }
+
   const startOver = (target = 'studio') => {
+    writeSession(DRAFT_KEY, null)
     setKind('from_scratch')
     setNote('')
     setFiles([])
@@ -928,6 +1111,7 @@ function App({ api = realApi }) {
     go(target, 'back')
   }
 
+  const closeChange = useCallback(() => setChangeOpen(false), [])
   const ready = Boolean(account && !account.pending && platforms.length && (kind === 'edit' ? files.length : note.trim()))
   const tabbed = TABS.some((tab) => tab.id === screen)
 
@@ -1022,8 +1206,9 @@ function App({ api = realApi }) {
               <label className="drop">
                 <span className="drop-icon" aria-hidden="true"><Upload /></span>
                 <span><strong>Elegir vídeo, audio o fotos</strong><small>Hasta 150 MB por archivo</small></span>
-                <input type="file" accept="image/*,video/*,audio/*" multiple onChange={(event) => {
+                <input ref={fileInputRef} type="file" accept="image/*,video/*,audio/*" multiple onChange={(event) => {
                   const chosen = Array.from(event.target.files || [])
+                  event.target.value = ''
                   if (chosen.some((file) => file.size > MAX_FILE_BYTES)) {
                     setError('Ese archivo supera los 150 MB. Elige uno más pequeño.')
                     setFiles([])
@@ -1031,9 +1216,23 @@ function App({ api = realApi }) {
                   }
                   setError('')
                   setFiles(chosen)
+                  tap()
                 }} />
               </label>
-              {files.length > 0 && <div className="thumbs">{files.map((file) => <FilePreview key={`${file.name}-${file.size}`} file={file} />)}</div>}
+              {files.length > 0 && (
+                <div className="thumbs">
+                  {files.map((file) => (
+                    <div className="thumb-wrap" key={`${file.name}-${file.size}-${file.lastModified}`}>
+                      <FilePreview file={file} />
+                      <button type="button" className="thumb-remove" aria-label={`Quitar ${file.name}`} onClick={() => {
+                        tap()
+                        setFiles((current) => current.filter((item) => item !== file))
+                        if (fileInputRef.current) fileInputRef.current.value = ''
+                      }}><X aria-hidden="true" /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
               {window.localStorage.getItem(UPLOAD_KEY) && <p className="fine">Hay una subida a medias. Elige exactamente los mismos archivos para continuar.</p>}
               <Field>
                 <FieldLabel htmlFor="note">Indicaciones</FieldLabel>
@@ -1078,22 +1277,43 @@ function App({ api = realApi }) {
         <TopBar onBack={() => go('encargos', 'back')} backLabel="Mis encargos" />
         <Heading eyebrow={eyebrow}>{failed ? <>No ha <em>salido.</em></> : <>Revelando <em>tu toma.</em></>}</Heading>
         {!failed && (
-          <div className="darkroom" aria-hidden="true">
+          <div className="darkroom" data-live="true" aria-hidden="true">
             <span className="darkroom-frame"><Skeleton className="h-full w-full rounded-[inherit]" /></span>
+            <span className="darkroom-sweep" />
             <span className="darkroom-rec"><span className="rec-dot" />REC</span>
           </div>
         )}
         {failed && <Badge variant="outline" className="status-pill"><XCircle aria-hidden="true" />Fallido</Badge>}
-        {!failed && <Progress value={uploading ? uploadProgress : [30, 66, 100][stageIndex]} aria-label="Preparando tu encargo" />}
+        {uploading && <Progress value={uploadProgress} aria-label="Subida de archivos" />}
+        {preparingLive && (
+          <div
+            className="stage-meter"
+            role="progressbar"
+            aria-label="Preparando tu encargo"
+            aria-valuemin={1}
+            aria-valuemax={STAGES.length}
+            aria-valuenow={stageIndex + 1}
+            aria-valuetext={STAGES[stageIndex]?.label ?? statusLabel(status)}
+          >
+            {STAGES.map((stage, index) => (
+              <i key={stage.id} aria-hidden="true" data-state={index < stageIndex ? 'done' : index === stageIndex ? 'now' : 'todo'} />
+            ))}
+          </div>
+        )}
         {!failed && (
           <ol className="stages">
-            {STAGES.map((stage, index) => (
-              <li key={stage.id} data-state={uploading ? 'todo' : index < stageIndex ? 'done' : index === stageIndex ? 'now' : 'todo'}>
-                <span className="stage-dot" aria-hidden="true">{index < stageIndex && !uploading ? <Check /> : null}</span>{stage.label}
-              </li>
-            ))}
+            {STAGES.map((stage, index) => {
+              const state = uploading || draft ? 'todo' : index < stageIndex ? 'done' : index === stageIndex ? 'now' : 'todo'
+              return (
+                <li key={stage.id} data-state={state} aria-current={state === 'now' ? 'step' : undefined}>
+                  <span className="stage-dot" aria-hidden="true">{state === 'done' ? <Check /> : null}</span>{stage.label}
+                </li>
+              )
+            })}
           </ol>
         )}
+        {preparingLive && <p className="beat" aria-hidden="true" key={beat}>{beat}</p>}
+        {preparingLive && <p className="sr-only" aria-live="polite">{statusLabel(status)}</p>}
         <p className="fine">{hint}</p>
         <ErrorLine>{error}</ErrorLine>
       </>
@@ -1114,13 +1334,15 @@ function App({ api = realApi }) {
         <Heading eyebrow={`Versión ${encargo?.version ?? 1}`}>Mira <em>lo que he preparado</em></Heading>
         <SwipeDeck disabled={Boolean(busy)} onRight={approveAndSchedule} onLeft={() => setChangeOpen(true)}>
           <div className="frame">
-            <FramePreview
-              preview={preview}
-              posterOnly={posterOnly}
-              onMediaError={() => setPosterOnly(true)}
-              note={encargo?.note ?? note}
-              version={encargo?.version}
-            />
+            <div className="frame-crop">
+              <FramePreview
+                preview={preview}
+                posterOnly={posterOnly}
+                onMediaError={() => setPosterOnly(true)}
+                note={encargo?.note ?? note}
+                version={encargo?.version}
+              />
+            </div>
             {synthetic && <Badge variant="secondary" className="ai-note"><Sparkles aria-hidden="true" />Hecho con ayuda de IA</Badge>}
           </div>
         </SwipeDeck>
@@ -1140,7 +1362,7 @@ function App({ api = realApi }) {
         </Section>
         {!changeOpen && <ErrorLine>{error}</ErrorLine>}
         {changeOpen && (
-          <Sheet title="¿Qué cambio?" onClose={() => setChangeOpen(false)}>
+          <Sheet title="¿Qué cambio?" onClose={closeChange}>
             <form className="stack" onSubmit={requestChanges}>
               <Field>
                 <FieldLabel htmlFor="change">Cambio</FieldLabel>
@@ -1222,7 +1444,9 @@ function App({ api = realApi }) {
     <>
       <TopBar />
       <Heading eyebrow="Tu camerino">Mis <em>encargos</em></Heading>
-      {encargos === null ? <ListSkeleton /> : encargos.length === 0 ? (
+      {encargos === null ? <ListSkeleton /> : encargosError ? (
+        <LoadError title="No he podido cargar los encargos" detail={encargosError} onRetry={() => { setEncargos(null); setEncargosError(''); loadEncargos() }} />
+      ) : encargos.length === 0 ? (
         <Empty className="min-h-0 flex-none items-start rounded-2xl border border-dashed border-input p-6 text-left">
           <EmptyHeader className="items-start text-left">
             <EmptyMedia variant="icon"><Inbox /></EmptyMedia>
@@ -1240,14 +1464,15 @@ function App({ api = realApi }) {
             const variant = item.status === 'ready' ? 'default' : 'secondary'
             return (
               <li key={item.id} className="encargo-row">
-                <button type="button" className="encargo-open" onClick={() => openListed(item)}>
+                <button type="button" className="encargo-open" aria-busy={openingId === item.id || undefined} disabled={openingId === item.id} onClick={() => openListed(item)}>
                   <span>
                     <strong className="encargo-title">{encargoTitle(item)}</strong>
                     <span>
                       {(me?.accounts.length ?? 0) > 1 && `${item.account_name ?? account?.name ?? 'Cuenta'} · `}
-                      Actualizado {formatWhen(item.updated_at ?? item.created_at)}
+                      Actualizado {formatWhen(item.updated_at ?? item.created_at, timeZone)}
                     </span>
                   </span>
+                  {openingId === item.id && <LoaderCircle className="spin" aria-hidden="true" />}
                   <Badge variant={variant} className={tone}>{statusLabel(item.status)}</Badge>
                 </button>
                 <CancelEncargoAction encargo={item} busy={busy} onConfirm={() => cancelListed(item)} />
@@ -1264,12 +1489,19 @@ function App({ api = realApi }) {
     <>
       <TopBar />
       <Heading eyebrow={account?.name}>Lo que <em>ha salido</em></Heading>
-      {activity === null ? <ListSkeleton /> : activity.length === 0 ? (
-        <div className="empty">
-          <Inbox aria-hidden="true" />
-          <p>Todavía no hay simulaciones.</p>
-          <Button variant="outline" onClick={() => openTab('studio')}>Preparar la primera</Button>
-        </div>
+      {activity === null ? <ListSkeleton /> : activityError ? (
+        <LoadError title="No he podido cargar el historial" detail={activityError} onRetry={() => { setActivity(null); setActivityError(''); setActivityNonce((current) => current + 1) }} />
+      ) : activity.length === 0 ? (
+        <Empty className="min-h-0 flex-none items-start rounded-2xl border border-dashed border-input p-6 text-left">
+          <EmptyHeader className="items-start text-left">
+            <EmptyMedia variant="icon"><Inbox /></EmptyMedia>
+            <EmptyTitle>Todavía no hay simulaciones</EmptyTitle>
+            <EmptyDescription>Cuando apruebes una toma, la referencia queda aquí.</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent className="items-start">
+            <Button variant="outline" onClick={() => openTab('studio')}>Preparar la primera</Button>
+          </EmptyContent>
+        </Empty>
       ) : (
         <ul className="feed">
           {activity.map((item) => (
@@ -1277,9 +1509,9 @@ function App({ api = realApi }) {
               <span className={`platform-dot platform-${String(item.platform).split(',')[0].trim().toLowerCase()}`} aria-hidden="true" />
               <div>
                 <strong>{platformLabel(item.platform)}</strong>
-                <span>{new Date(item.published_at ?? item.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                <span>{formatWhen(item.published_at ?? item.created_at, timeZone)}</span>
               </div>
-              <code>{item.mock_id}</code>
+              <button type="button" className="mock-copy" aria-label={`Copiar ${item.mock_id}`} onClick={() => copyText(item.mock_id, 'Identificador copiado')}>{item.mock_id}</button>
             </li>
           ))}
         </ul>
@@ -1303,9 +1535,11 @@ function App({ api = realApi }) {
         <ul className="feed">
           {me?.accounts.map((item) => (
             <li key={item.id} data-pending={item.pending ? 'true' : undefined}>
-              <span className="avatar" aria-hidden="true">{item.name.slice(0, 1).toUpperCase()}</span>
-              <div><strong>{item.name}</strong><span>{item.pending ? 'Creando…' : `Racha de ${days(streaks[item.id] ?? 0)}`}</span></div>
-              {item.id === accountId && <Check aria-label="Cuenta activa" />}
+              <button type="button" className="account-open" disabled={item.pending} aria-pressed={item.id === accountId} onClick={() => { tap(); setAccountId(item.id) }}>
+                <span className="avatar" aria-hidden="true">{item.name.slice(0, 1).toUpperCase()}</span>
+                <span><strong>{item.name}</strong><span>{item.pending ? 'Creando…' : `Racha de ${days(streaks[item.id] ?? 0)}`}</span></span>
+                {item.id === accountId && <Check aria-hidden="true" />}
+              </button>
             </li>
           ))}
         </ul>
@@ -1335,7 +1569,7 @@ function App({ api = realApi }) {
         <p>El camerino de tu influencer virtual. Ideas, tomas y aprobaciones, todo en simulación.</p>
       </aside>
       <main className="phone">
-        <div className="view" key={screen} data-dir={direction}>{view}</div>
+        <div className="view" key={screen} data-screen={screen} data-dir={direction} data-arrive={arrive && screen === 'preview' ? arrive : undefined}>{view}</div>
         {(cta || tabbed) && (
           <div className="dock">
             {cta}

@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../src/App.jsx'
 import fakeApi, { configureFakeApi, getFakeApiState, resetFakeApi } from '../src/api/fakeApi.js'
 
@@ -9,6 +9,7 @@ describe('mobile creation flow', () => {
     resetFakeApi()
     configureFakeApi({ transitionReads: 0.5 })
     localStorage.clear()
+    sessionStorage.clear()
     delete document.documentElement.dataset.theme
     window.history.replaceState({}, '', '/')
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
@@ -34,7 +35,9 @@ describe('mobile creation flow', () => {
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
 
     expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
-    expect(screen.getByText('Hecho con ayuda de IA')).toBeInTheDocument()
+    const aiNote = screen.getByText('Hecho con ayuda de IA')
+    expect(aiNote.closest('.frame')).toBeTruthy()
+    expect(aiNote.closest('.frame-crop')).toBeNull()
     expect(screen.getByText('Versión 1')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Pedir un cambio' }))
@@ -56,6 +59,11 @@ describe('mobile creation flow', () => {
     await user.click(screen.getByRole('button', { name: 'Ver historial' }))
     expect(await screen.findAllByText(/MOCK-/)).toHaveLength(3)
     expect(screen.getByRole('button', { name: 'Historial' })).toHaveAttribute('aria-current', 'page')
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    await user.click(screen.getAllByRole('button', { name: /^Copiar MOCK-/ })[0])
+    expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^MOCK-/))
+    expect(await screen.findByText('Identificador copiado')).toBeInTheDocument()
   })
 
   it('cancels an encargo from the preview step after confirmation', async () => {
@@ -85,6 +93,7 @@ describe('mobile creation flow', () => {
 
     const file = new File(['crop'], 'original.mp4', { type: 'video/mp4' })
     await user.upload(screen.getByLabelText(/Elegir vídeo, audio o fotos/), file)
+    expect(screen.getByRole('button', { name: 'Quitar original.mp4' })).toBeInTheDocument()
     await user.type(screen.getByLabelText('Indicaciones'), 'Solo recorta el final')
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
     expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
@@ -110,6 +119,10 @@ describe('mobile creation flow', () => {
     await user.click(screen.getByRole('button', { name: 'Crear cuenta' }))
     expect(screen.getByText('Segunda')).toBeInTheDocument()
     expect(await screen.findByText('Cuenta «Segunda» lista')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^Alex/ }))
+    expect(screen.getByRole('button', { name: /^Alex/ })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: /Segunda/ }))
+    expect(screen.getByRole('button', { name: /Segunda/ })).toHaveAttribute('aria-pressed', 'true')
 
     await user.click(screen.getByRole('radio', { name: 'Oscuro' }))
     expect(document.documentElement.dataset.theme).toBe('dark')
@@ -136,6 +149,13 @@ describe('mobile creation flow', () => {
     await user.type(screen.getByLabelText('Tu idea'), 'Una toma para mañana')
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
     expect(await screen.findByRole('heading', { name: 'Revelando tu toma.' })).toBeInTheDocument()
+    const meter = screen.getByRole('progressbar', { name: 'Preparando tu encargo' })
+    expect(meter).toHaveAttribute('aria-valuenow', '1')
+    expect(meter).toHaveAttribute('aria-valuemax', '3')
+    expect(meter).toHaveAttribute('aria-valuetext', 'En cola')
+    expect(screen.getByText('En cola, en silencio…')).toBeInTheDocument()
+    expect(screen.getByRole('listitem', { current: 'step' })).toHaveTextContent('En cola')
+    expect(screen.queryByText('30%')).not.toBeInTheDocument()
     expect(screen.getByText('Puedes cerrar la app; aquí verás el estado de tu encargo cuando vuelvas.')).toBeInTheDocument()
     expect(screen.queryByText(/segundo plano/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Inicio' })).toBeInTheDocument()
@@ -207,5 +227,33 @@ describe('mobile creation flow', () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
     document.dispatchEvent(new Event('visibilitychange'))
     await waitFor(() => expect(getFakeApiState().encargos.at(-1).reads).toBe(1))
+  })
+
+  it('restores the studio draft within the session', async () => {
+    resetFakeApi({ onboarded: true })
+    sessionStorage.setItem('influ-studio-draft', JSON.stringify({
+      kind: 'from_scratch',
+      note: 'Idea guardada',
+      platforms: ['YouTube', 'TikTok'],
+    }))
+    render(<App api={fakeApi} />)
+    expect(await screen.findByLabelText('Tu idea')).toHaveValue('Idea guardada')
+    expect(screen.getByRole('button', { name: 'YouTube' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'TikTok' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Instagram' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('shows a load error instead of an empty encargos list', async () => {
+    resetFakeApi({ onboarded: true })
+    const user = userEvent.setup()
+    const api = {
+      ...fakeApi,
+      listEncargos: async () => ({ ok: false, error: { message: 'No he podido leer los encargos.' } }),
+    }
+    render(<App api={api} />)
+    await user.click(await screen.findByRole('button', { name: 'Mis encargos' }))
+    expect(await screen.findByText('No he podido cargar los encargos')).toBeInTheDocument()
+    expect(screen.getByText('No he podido leer los encargos.')).toBeInTheDocument()
+    expect(screen.queryByText('Todavía no tienes encargos')).not.toBeInTheDocument()
   })
 })
