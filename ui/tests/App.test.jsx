@@ -45,6 +45,28 @@ describe('mobile creation flow', () => {
     expect(await screen.findAllByText(/MOCK-/)).toHaveLength(3)
   })
 
+  it('cancels an encargo from the preview step after confirmation', async () => {
+    const user = userEvent.setup()
+    render(<App api={fakeApi} />)
+    await user.click(screen.getByRole('button', { name: 'Entrar' }))
+    await user.click(screen.getByRole('button', { name: 'Empezar' }))
+    await user.type(screen.getByLabelText('Nombre'), 'Alex')
+    await user.click(screen.getByRole('button', { name: 'Listo' }))
+    await user.click(await screen.findByRole('button', { name: /Alex/ }))
+    await user.click(screen.getByRole('button', { name: /Crear desde cero/ }))
+    await user.type(screen.getByLabelText('Tu idea'), 'Cancelar antes de publicar')
+    await user.click(screen.getByRole('button', { name: 'Prepararlo' }))
+    await user.click(screen.getByRole('button', { name: 'Seguir' }))
+    expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Cancelar encargo' }))
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Sí, cancelar' }))
+    expect(await screen.findByRole('heading', { name: 'Encargo cancelado' })).toBeInTheDocument()
+    expect(screen.getByText('Cancelado')).toBeInTheDocument()
+    expect(getFakeApiState().encargos.at(-1).status).toBe('cancelled')
+  })
+
   it('does not show an AI notice for a plain crop', async () => {
     resetFakeApi({ onboarded: true })
     const user = userEvent.setup()

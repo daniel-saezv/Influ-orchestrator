@@ -137,6 +137,12 @@ h1 { margin: 0; max-width: 12ch; font-family: "Iowan Old Style", "Baskerville", 
 .mock-video { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .8rem; color: #fff6eb; background: radial-gradient(circle at 30% 20%, #d99f74, transparent 28%), radial-gradient(circle at 80% 70%, #426b60, transparent 34%), #25211e; }
 .preview-version { position: absolute; right: .75rem; top: .75rem; border-color: rgb(255 255 255 / 18%); background: rgb(0 0 0 / 55%); color: white; padding: .35rem .55rem; font-size: .7rem; backdrop-filter: blur(8px); }
 .decision-footer { display: flex; flex-direction: column; gap: .65rem; }
+.cancel-link { width: 100%; color: var(--destructive); }
+.cancel-link:hover { color: var(--destructive); background: color-mix(in srgb, var(--destructive) 10%, transparent); }
+.cancel-confirm { display: flex; flex-direction: column; gap: .75rem; padding: 1rem; border: 1px solid color-mix(in srgb, var(--destructive) 28%, var(--border)); border-radius: var(--radius); background: color-mix(in srgb, var(--destructive) 6%, var(--surface)); }
+.cancel-confirm-title { margin: 0; font-weight: 700; color: var(--foreground); }
+.cancel-confirm-actions { display: flex; flex-direction: column; gap: .65rem; }
+.status-pill { display: inline-flex; gap: .5rem; align-items: center; width: fit-content; margin: 0; padding: .5rem .75rem; font-size: .82rem; color: var(--destructive); border-color: color-mix(in srgb, var(--destructive) 24%, var(--border)); }
 .schedule-choice { min-height: 5.25rem; width: 100%; display: flex; align-items: center; gap: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius); text-align: left; background: var(--surface); color: var(--foreground); box-shadow: 0 .6rem 1.6rem rgb(25 72 59 / 6%); }
 .schedule-choice.selected { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent); }
 .schedule-choice > span { display: flex; flex-direction: column; gap: .25rem; }

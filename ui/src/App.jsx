@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, CalendarDays, Check, Clock3, History, Plus, Sparkles, Upload, UserRound } from 'lucide-react'
+import { ArrowLeft, CalendarDays, Check, Clock3, History, Plus, Sparkles, Upload, UserRound, XCircle } from 'lucide-react'
 import realApi, { sha256Hex } from './api/api.js'
 import { Badge } from './components/ui/badge.jsx'
 import { Button } from './components/ui/button.jsx'
@@ -12,6 +12,8 @@ import { ToggleGroup, ToggleGroupItem } from './components/ui/toggle-group.jsx'
 
 const PLATFORMS = ['YouTube', 'Instagram', 'TikTok']
 const MAX_FILE_BYTES = 150 * 1024 * 1024
+const NON_CANCELLABLE_ENCARGO_STATUSES = new Set(['cancelled', 'scheduled'])
+
 const SAFE_PREVIEW_TYPES = new Set([
   'image/avif',
   'image/bmp',
@@ -58,6 +60,33 @@ function Loading() {
       <Skeleton className="h-14 w-full" />
       <Skeleton className="h-14 w-3/4" />
     </div>
+  )
+}
+
+function canCancelEncargo(status) {
+  return Boolean(status) && !NON_CANCELLABLE_ENCARGO_STATUSES.has(status)
+}
+
+function CancelEncargoAction({ encargo, loading, onConfirm }) {
+  const [confirming, setConfirming] = useState(false)
+  if (!canCancelEncargo(encargo?.status)) return null
+  if (confirming) {
+    return (
+      <div className="cancel-confirm" role="alertdialog" aria-labelledby="cancel-title" aria-describedby="cancel-desc">
+        <p id="cancel-title" className="cancel-confirm-title">¿Cancelar este encargo?</p>
+        <p id="cancel-desc" className="helper">No se publicará y dejarás de trabajar en esta versión.</p>
+        <div className="cancel-confirm-actions">
+          <Button variant="outline" className="primary-action" onClick={() => setConfirming(false)} disabled={loading}>No, seguir</Button>
+          <Button variant="destructive" className="primary-action" onClick={onConfirm} disabled={loading}>Sí, cancelar</Button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <Button variant="ghost" className="cancel-link" onClick={() => setConfirming(true)} disabled={loading}>
+      <XCircle aria-hidden="true" data-icon="inline-start" />
+      Cancelar encargo
+    </Button>
   )
 }
 
@@ -227,6 +256,11 @@ function App({ api = realApi }) {
       const response = await api.getEncargo(encargo.id)
       if (!response.ok || stopped) return
       setEncargo(response.data)
+      if (response.data.status === 'cancelled') {
+        setEncargo(response.data)
+        setScreen('cancelled')
+        return
+      }
       if (response.data.status === 'ready') {
         const media = await api.getMedia(response.data.result_sha256)
         if (media.ok) setPreview(media.data)
@@ -265,6 +299,16 @@ function App({ api = realApi }) {
       setChangeNote('')
       setScreen('preparing')
     }
+  }
+
+  const cancelActiveEncargo = async () => {
+    if (!encargo?.id) return
+    const cancelled = await run(() => api.cancelEncargo(encargo.id))
+    if (!cancelled) return
+    setEncargo(cancelled)
+    setPreview(null)
+    window.localStorage.removeItem('influ-upload-session')
+    setScreen('cancelled')
   }
 
   const schedule = async () => {
@@ -462,13 +506,16 @@ function App({ api = realApi }) {
   )
 
   if (screen === 'preparing') return (
-    <Shell eyebrow={encargo ? `Estado: ${encargo.status}` : ''} title="Lo estoy preparando.">
+    <Shell eyebrow={encargo ? `Estado: ${encargo.status}` : ''} title="Lo estoy preparando." footer={
+      <CancelEncargoAction encargo={encargo} loading={loading} onConfirm={cancelActiveEncargo} />
+    }>
       <div className="preparing-state">
         <div className="orb"><Sparkles aria-hidden="true" /></div>
         <Progress value={uploadProgress || 58} aria-label="Preparando tu encargo" />
         <p>Sin decisión todavía. Puedes dejarlo en segundo plano.</p>
         <p className="helper">Compruebo el estado como mucho cada 15 segundos y solo con esta pestaña visible.</p>
       </div>
+      {error && <p className="error" role="alert">{error}</p>}
     </Shell>
   )
 
@@ -477,6 +524,7 @@ function App({ api = realApi }) {
       <div className="decision-footer">
         <Button className="primary-action" size="lg" onClick={approve} disabled={loading}>¡Me gusta!</Button>
         <Button className="primary-action" size="lg" variant="outline" onClick={() => setScreen('change')}>Cambiar algo</Button>
+        <CancelEncargoAction encargo={encargo} loading={loading} onConfirm={cancelActiveEncargo} />
       </div>
     }>
       <div className="vertical-preview">
@@ -492,7 +540,10 @@ function App({ api = realApi }) {
 
   if (screen === 'change') return (
     <Shell eyebrow="Me cuentas el cambio" title="¿Qué cambio?" onBack={() => setScreen('preview')} footer={
-      <Button className="primary-action" size="lg" disabled={!changeNote.trim() || loading} onClick={requestChanges}>Volver a preparar</Button>
+      <>
+        <Button className="primary-action" size="lg" disabled={!changeNote.trim() || loading} onClick={requestChanges}>Volver a preparar</Button>
+        <CancelEncargoAction encargo={encargo} loading={loading} onConfirm={cancelActiveEncargo} />
+      </>
     }>
       <Field><FieldLabel htmlFor="change">Cambio</FieldLabel><Textarea id="change" autoFocus value={changeNote} onChange={(event) => setChangeNote(event.target.value)} rows={7} /></Field>
     </Shell>
@@ -500,9 +551,12 @@ function App({ api = realApi }) {
 
   if (screen === 'when') return (
     <Shell eyebrow="Aprobado" title="¿Cuándo?" onBack={() => setScreen('preview')} footer={
-      <Button className="primary-action" size="lg" onClick={scheduleMode === 'at' ? () => setScreen('date') : schedule}>{
-        scheduleMode === 'at' ? 'Elegir día y hora' : 'Listo'
-      }</Button>
+      <>
+        <Button className="primary-action" size="lg" onClick={scheduleMode === 'at' ? () => setScreen('date') : schedule}>{
+          scheduleMode === 'at' ? 'Elegir día y hora' : 'Listo'
+        }</Button>
+        <CancelEncargoAction encargo={encargo} loading={loading} onConfirm={cancelActiveEncargo} />
+      </>
     }>
       <div className="stack">
         <button className={`schedule-choice ${scheduleMode === 'now' ? 'selected' : ''}`} onClick={() => setScheduleMode('now')}><Clock3 aria-hidden="true" /><span><strong>Ahora</strong><small>En esta simulación queda publicado.</small></span></button>
@@ -513,7 +567,10 @@ function App({ api = realApi }) {
 
   if (screen === 'date') return (
     <Shell eyebrow="Programación" title="Día y hora" onBack={() => setScreen('when')} footer={
-      <Button className="primary-action" size="lg" disabled={!scheduleAt || loading} onClick={schedule}>Programar</Button>
+      <>
+        <Button className="primary-action" size="lg" disabled={!scheduleAt || loading} onClick={schedule}>Programar</Button>
+        <CancelEncargoAction encargo={encargo} loading={loading} onConfirm={cancelActiveEncargo} />
+      </>
     }>
       <Field>
         <FieldLabel htmlFor="schedule-at">Cuándo</FieldLabel>
@@ -521,6 +578,30 @@ function App({ api = realApi }) {
         <FieldDescription>Zona horaria del teléfono: {timeZone}</FieldDescription>
       </Field>
       {error && <p className="error" role="alert">{error}</p>}
+    </Shell>
+  )
+
+  if (screen === 'cancelled') return (
+    <Shell eyebrow="Estado: cancelado" title="Encargo cancelado" footer={
+      <>
+        <Button className="primary-action" size="lg" onClick={startOver}>Volver a empezar</Button>
+        <Button className="primary-action" variant="outline" onClick={() => setScreen('accounts')}>Mis cuentas</Button>
+      </>
+    }>
+      <Badge variant="secondary" className="status-pill"><XCircle aria-hidden="true" />Cancelado</Badge>
+      <p className="lead">Este encargo ya no seguirá preparándose ni se publicará en la simulación.</p>
+      {encargo?.platforms?.length > 0 && (
+        <Card className="receipt-card">
+          <CardHeader>
+            <CardTitle>Resumen</CardTitle>
+            <CardDescription>Plataformas que habías elegido.</CardDescription>
+          </CardHeader>
+          <CardContent className="receipt">
+            <p><span>Plataformas</span><strong>{encargo.platforms.join(', ')}</strong></p>
+            <p><span>Estado</span><strong>cancelado</strong></p>
+          </CardContent>
+        </Card>
+      )}
     </Shell>
   )
 
