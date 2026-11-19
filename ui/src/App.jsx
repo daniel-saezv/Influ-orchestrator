@@ -238,6 +238,26 @@ function PosterFrame({ note, version }) {
   )
 }
 
+function previewMediaKind(contentType) {
+  const type = String(contentType ?? '').toLowerCase()
+  if (type.startsWith('image/')) return 'image'
+  if (type.startsWith('video/')) return 'video'
+  if (type.startsWith('audio/')) return 'audio'
+  return null
+}
+
+function FramePreview({ preview, posterOnly, onMediaError, note, version }) {
+  const kind = !posterOnly && preview?.url ? previewMediaKind(preview.content_type) : null
+  if (!kind) return <PosterFrame note={note} version={version} />
+  if (kind === 'image') {
+    return <img className="frame-media frame-media-image" src={preview.url} alt="Previa del encargo" onError={onMediaError} />
+  }
+  if (kind === 'audio') {
+    return <audio className="frame-media frame-media-audio" src={preview.url} controls onError={onMediaError} />
+  }
+  return <video className="frame-media" src={preview.url} playsInline controls onError={onMediaError} />
+}
+
 function SwipeDeck({ disabled, onRight, onLeft, children }) {
   const [dx, setDx] = useState(0)
   const drag = useRef(null)
@@ -1088,16 +1108,19 @@ function App({ api = realApi }) {
 
   if (screen === 'preview') {
     const synthetic = preview?.synthetic || preview?.contains_synthetic_media || encargo?.synthetic
-    const playable = preview?.url && preview.content_type?.startsWith('video/') && !posterOnly
     view = (
       <>
         <TopBar onBack={() => go('encargos', 'back')} backLabel="Mis encargos" />
         <Heading eyebrow={`Versión ${encargo?.version ?? 1}`}>Mira <em>lo que he preparado</em></Heading>
         <SwipeDeck disabled={Boolean(busy)} onRight={approveAndSchedule} onLeft={() => setChangeOpen(true)}>
           <div className="frame">
-            {playable
-              ? <video className="frame-media" src={preview.url} playsInline controls onError={() => setPosterOnly(true)} />
-              : <PosterFrame note={encargo?.note ?? note} version={encargo?.version} />}
+            <FramePreview
+              preview={preview}
+              posterOnly={posterOnly}
+              onMediaError={() => setPosterOnly(true)}
+              note={encargo?.note ?? note}
+              version={encargo?.version}
+            />
             {synthetic && <Badge variant="secondary" className="ai-note"><Sparkles aria-hidden="true" />Hecho con ayuda de IA</Badge>}
           </div>
         </SwipeDeck>

@@ -258,8 +258,10 @@ h1 em { font-style: italic; font-weight: 380; color: var(--saffron-ink); }
 .deck-stamp { position: absolute; top: 1.5rem; z-index: 3; padding: .35rem .8rem; border: 2px solid; border-radius: .6rem; font-family: var(--font-display); font-style: italic; font-size: 1.2rem; font-weight: 600; pointer-events: none; background: color-mix(in srgb, var(--paper) 85%, transparent); transition: opacity .15s; }
 .deck-yes { left: 1rem; color: #2f7a4d; border-color: #2f7a4d; }
 .deck-no { right: 1rem; color: var(--rec); border-color: var(--rec); }
-.frame { position: relative; aspect-ratio: 9 / 16; border-radius: 1.75rem; padding: .45rem; background: var(--bezel); box-shadow: var(--deep); }
-.frame-media { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 1.35rem; background: #0e0b08; }
+.frame { position: relative; display: grid; place-items: center; aspect-ratio: 9 / 16; border-radius: 1.75rem; padding: .45rem; background: var(--bezel); box-shadow: var(--deep); overflow: hidden; }
+.frame-media { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: cover; border-radius: 1.35rem; background: #0e0b08; }
+.frame-media-image { object-fit: contain; }
+.frame-media-audio { width: calc(100% - .5rem); height: auto; max-height: 4.5rem; object-fit: initial; align-self: center; }
 .poster { position: relative; height: 100%; border-radius: 1.35rem; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; gap: .6rem; padding: 1.25rem; color: #fbf7ef; background: radial-gradient(120% 70% at 85% 10%, rgb(234 176 76 / 55%), transparent 55%), radial-gradient(90% 60% at 0% 100%, rgb(224 72 43 / 45%), transparent 60%), linear-gradient(170deg, #3b2b1b, #150f0a); }
 .poster-light { position: absolute; inset: -20% -40% auto auto; width: 70%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgb(255 236 200 / 35%), transparent 65%); animation: drift 6s ease-in-out infinite alternate; }
 .poster-rec { position: absolute; top: 1rem; left: 1rem; display: inline-flex; align-items: center; gap: .35rem; font-size: .62rem; font-weight: 700; letter-spacing: .18em; }
