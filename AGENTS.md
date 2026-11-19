@@ -6,7 +6,7 @@ Fuente única de instrucciones de este repositorio para Cursor (editor y cloud a
 
 POC de Fase 1: producción y publicación **simulada** de lotes de un influencer virtual. Nada se publica en redes reales. El modo LIVE está bloqueado en código (`LIVE_ENABLED_IN_BUILD = false` en `src/core/config.js`).
 
-El orquestador recibe un lote, lo deja a revisión, exige una aprobación ligada a versión y huella SHA-256, y el cron despacha las piezas aprobadas al adaptador YouTube MOCK. Visión general: [README.md](README.md). Arquitectura: [docs/arquitectura.md](docs/arquitectura.md).
+El orquestador recibe un lote, lo deja a revisión, exige una aprobación ligada a versión y huella SHA-256, y el cron despacha las piezas aprobadas al adaptador YouTube MOCK. El conector MCP de Grok Bot y el webhook de la rutina están en [docs/mcp-grok.md](docs/mcp-grok.md): no hay herramienta de aprobar ni de publicar. Visión general: [README.md](README.md). Arquitectura: [docs/arquitectura.md](docs/arquitectura.md).
 
 ## Stack y estructura
 
@@ -16,7 +16,7 @@ JavaScript ESM (`"type": "module"`), Node `>=22` (las pruebas usan `node:sqlite`
 |---|---|
 | `src/core/` | Dominio, puertos y modo (fail-closed). Sin I/O de red ni de Cloudflare. |
 | `src/workflows/` | WF-01 recibir, WF-02 aprobar, WF-03 despachar, WF-04 publicar, más revisión e informe. |
-| `src/adapters/` | HTTP (HMAC, Access JWT, rate limit, guardia de salida), D1, KV y publishers (YouTube MOCK, stub LIVE, huecos Instagram/TikTok). |
+| `src/adapters/` | HTTP (HMAC, Access JWT, rate limit, guardia de salida, webhook de encargos), MCP (`/mcp`), D1, KV, R2 y publishers (YouTube MOCK, stub LIVE, Instagram y TikTok MOCK). |
 | `src/worker.js` | `fetch` + `scheduled`. |
 | `bot/` | CLI de Grok Bot (`bot/influ.mjs`) y cliente HMAC. |
 | `content/batches/` | Lotes. `LOTE-0001` es el ejemplo. |
@@ -25,18 +25,18 @@ JavaScript ESM (`"type": "module"`), Node `>=22` (las pruebas usan `node:sqlite`
 | `deploy/` | Guardia de modo mock, sincronización D1, smoke de `/v1/health` y el generador legacy `build.mjs`. |
 | `tests/` | Unitarios (`node:test`) y aceptación local/remota. El shim D1 está en `tests/helpers/d1-shim.mjs`. |
 | `ui/` | SPA/PWA mobile-first de encargos. Tiene su propio `package.json`, lockfile, `components.json`, pruebas Vitest y cliente real del mismo origen; su build `dist/` se sirve como asset del Worker. |
-| `docs/` | Arquitectura, contratos, datos, seguridad, instalación, despliegue, n8n, YouTube LIVE. |
+| `docs/` | Arquitectura, contratos, datos, seguridad, instalación, despliegue, n8n, YouTube LIVE, conector MCP y rutina. |
 | `reports/` | Informes ya generados. La aceptación local reescribe `reports/acceptance-local.*`; no lo versiones si solo has relanzado las pruebas. |
 
-`ui/components.json` configura shadcn en la aplicación Vite; no se mueve a la raíz. `wrangler.toml` sirve `ui/dist` como assets con fallback SPA; `/v1/*` se ejecuta primero en el Worker para no interferir con la API.
+`ui/components.json` configura shadcn en la aplicación Vite; no se mueve a la raíz. `wrangler.toml` sirve `ui/dist` como assets con fallback SPA; `/v1/*` y `/mcp` se ejecutan primero en el Worker para no interferir con la API ni con el conector.
 
 ## Comandos
 
-Comprobados en este clon el 2026-11-18 (Node v22.23.4, npm 10.9.9):
+Comprobados en este clon el 2026-11-19 (Node v22.23.4, npm 10.9.9):
 
-- Instalación: `npm ci` (41 paquetes auditados, 0 vulnerabilidades). Deja Wrangler 4.164.0.
+- Instalación: `npm ci` (125 paquetes auditados, 0 vulnerabilidades). Deja Wrangler 4.164.0.
 - Build: `cd ui && npm run build` genera `ui/dist`; después `npm run deploy:dry-run` ejecuta `wrangler deploy --dry-run` y empaqueta Worker y assets. `npm run build:deploy` sin argumentos solo imprime el uso del generador legacy (`worker|migrate|secrets`); no es el despliegue canónico.
-- Tests: `npm run test:unit` (69 pruebas, 0 fallos) y `npm run test:acceptance -- --target local` (18/18 OK, en memoria). `npm run deploy:guard` exige `PUBLISHER_MODE=mock` y `LIVE_ENABLED_IN_BUILD=false`.
+- Tests: `npm run test:unit` (73 pruebas, 0 fallos) y `npm run test:acceptance -- --target local` (19/19 OK, en memoria). `npm run deploy:guard` exige `PUBLISHER_MODE=mock` y `LIVE_ENABLED_IN_BUILD=false`.
 - UI: `cd ui && npm ci && npm run dev` arranca Vite. La validación aislada es `cd ui && npm run lint && npm run test:run && npm run build`. Ese build es obligatorio antes de empaquetar, previsualizar o desplegar el Worker.
 - Arranque: no hay `npm start`. El proceso que sirve la API es el Worker desplegado en Cloudflare (`docs/despliegue-ci.md`). En local, el sustituto que sí arranca la API es la aceptación: `npm run test:acceptance -- --target local`. `npx wrangler dev --local --port 8787` no llega a escuchar: workerd rechaza el export `SERVICE_VERSION` (`Incorrect type for map entry 'SERVICE_VERSION'`). No está corregido. `node bot/influ.mjs` sin entorno termina con código 2 y pide `INFLU_BASE_URL`, `INFLU_BOT_HMAC_SECRET` e `INFLU_APPROVER_HMAC_SECRET`.
 
@@ -47,8 +47,8 @@ La aceptación remota (`--target remote`), `node n8n/verify-sign-nodes.mjs` y `n
 ## Buenas prácticas
 
 - El núcleo no elige red social ni almacenamiento. Un publisher nuevo implementa el puerto `SocialPublisher` y se registra en `src/adapters/publishers/registry.js`. Guía: `docs/guia-nuevos-adaptadores.md`.
-- Fail-closed: el valor por defecto es MOCK. LIVE sigue deshabilitado en esta build aunque lleguen variables o un cuerpo HTTP. No pongas `PUBLISHER_MODE=live` en `wrangler.toml`. La guardia de salida, en MOCK, no permite ningún host.
-- Secretos HMAC (`BOT_HMAC_SECRET`, `APPROVER_HMAC_SECRET`) solo con `wrangler secret put` o el panel. No van en git, en `wrangler.toml` ni en el workflow. El CLI usa `INFLU_BOT_HMAC_SECRET`, `INFLU_APPROVER_HMAC_SECRET` e `INFLU_BASE_URL`. Con Access, también `INFLU_CF_ACCESS_CLIENT_ID` e `INFLU_CF_ACCESS_CLIENT_SECRET`.
+- Fail-closed: el valor por defecto es MOCK. LIVE sigue deshabilitado en esta build aunque lleguen variables o un cuerpo HTTP. No pongas `PUBLISHER_MODE=live` en `wrangler.toml`. La guardia de salida, en MOCK, no permite hosts de publicación. El único `fetch` de aplicación es el webhook del encargo, y solo hacia el host de `INFLU_WEBHOOK_URL` cuando ese secreto y `INFLU_WEBHOOK_SECRET` existen.
+- Secretos HMAC (`BOT_HMAC_SECRET`, `APPROVER_HMAC_SECRET`), el bearer del MCP (`MCP_BEARER_TOKEN`) y el webhook (`INFLU_WEBHOOK_URL`, `INFLU_WEBHOOK_SECRET`) solo con `wrangler secret put` o el panel. No van en git, en `wrangler.toml` ni en el workflow. El CLI usa `INFLU_BOT_HMAC_SECRET`, `INFLU_APPROVER_HMAC_SECRET` e `INFLU_BASE_URL`. Con Access, también `INFLU_CF_ACCESS_CLIENT_ID` e `INFLU_CF_ACCESS_CLIENT_SECRET`. Cómo conectar el MCP y la rutina, sin valores: `docs/mcp-grok.md`.
 - `wrangler deploy` conserva los secrets ya cargados en el Worker. Las migraciones D1 ya aplicadas a mano se sincronizan con `deploy/d1-migrations-sync.mjs` antes de `wrangler d1 migrations apply` (lo hace el job de `main`).
 - Pruebas con `node:test`, sin framework añadido. La aceptación local no toca la cuenta de Cloudflare. `wrangler deploy --dry-run` y `wrangler dev` escriben estado en `.wrangler/`; está en `.gitignore`.
 - Plantillas n8n: no las regeneres con `node n8n/build-workflows.mjs` salvo que el cambio sea ese generador; reescribe UUID en `n8n/workflows/`.
@@ -146,4 +146,4 @@ Secretos que hay que añadir en Cursor solo si el agente debe desplegar o hablar
 - `INFLU_BOT_HMAC_SECRET`
 - `INFLU_APPROVER_HMAC_SECRET`
 
-Los dos HMAC del Worker (`BOT_HMAC_SECRET`, `APPROVER_HMAC_SECRET`) viven en Cloudflare, no en Cursor. Permisos del token: [docs/despliegue-ci.md](docs/despliegue-ci.md).
+Los HMAC del Worker (`BOT_HMAC_SECRET`, `APPROVER_HMAC_SECRET`), el bearer del conector (`MCP_BEARER_TOKEN`) y el webhook de la rutina (`INFLU_WEBHOOK_URL`, `INFLU_WEBHOOK_SECRET`) viven en Cloudflare, no en Cursor. Permisos del token: [docs/despliegue-ci.md](docs/despliegue-ci.md).

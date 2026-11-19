@@ -20,8 +20,12 @@ import { dispatch, publishBatchNow } from './workflows/wf03-schedule-dispatch.js
 import { buildReview, buildResults } from './workflows/reports.js';
 import { normalizeEmail } from './core/domain/encargos.js';
 import { claimEncargo, dispatchPerson, listQueued, submitEncargoResult } from './workflows/encargos.js';
+import { reviewUnclaimedQueue } from './workflows/encargo-backup.js';
 import { getMediaResponse, putUploadPart } from './workflows/uploads.js';
 import { deleteOrphanUploads, retryPendingDeletes } from './workflows/r2-gc.js';
+import { mcpBearerOk } from './adapters/mcp/bearer.js';
+import { MCP_PATH, createInfluMcpHandler } from './adapters/mcp/influ-mcp.js';
+import { notifyEncargoQueued } from './adapters/http/encargo-webhook.js';
 
 export const SERVICE_VERSION = '0.1.0';
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
@@ -33,6 +37,33 @@ export function setAccessJwtDeps(deps) { accessJwtDeps = deps ?? {}; }
 
 function isPersonRoute(pathname) {
   return pathname === '/v1/me' || pathname.startsWith('/v1/me/');
+}
+
+function isMcpRoute(pathname) {
+  return pathname === MCP_PATH;
+}
+
+async function handleMcp(request, env, ctx) {
+  const ok = await mcpBearerOk(request, env.MCP_BEARER_TOKEN);
+  if (!ok) {
+    await applyHttpRateLimit(request, env, { scope: 'anon' });
+    return json(401, { ok: false, error: { code: 'UNAUTHENTICATED', message: 'MCP no autorizado' } });
+  }
+  return createInfluMcpHandler(env)(request, env, ctx);
+}
+
+async function maybeNotifyEncargo(env, ctx, method, pathname, data) {
+  if (method !== 'POST' || pathname !== '/v1/me/encargos' || data?.status !== 'queued') return;
+  const task = notifyEncargoQueued(env, {
+    encargo_id: data.encargo_id, kind: data.kind, status: data.status,
+  }).then((result) => {
+    if (result.sent || result.reason === 'absent') return;
+    console.info(JSON.stringify({ event: 'encargo_webhook_failed', encargo_id: data.encargo_id, reason: result.reason }));
+  }).catch(() => {
+    console.info(JSON.stringify({ event: 'encargo_webhook_failed', encargo_id: data.encargo_id, reason: 'error' }));
+  });
+  if (typeof ctx?.waitUntil === 'function') ctx.waitUntil(task);
+  else await task;
 }
 
 // En MOCK la lista de hosts permitidos está vacía: ninguna salida a Internet.
@@ -93,8 +124,17 @@ const ROUTES = [
 ];
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, execCtx) {
     const url = new URL(request.url);
+    if (isMcpRoute(url.pathname)) {
+      try {
+        return await handleMcp(request, env, execCtx);
+      } catch (e) {
+        if (e instanceof DomainError) return json(e.http, { ok: false, error: e.toJSON() });
+        console.error('UNHANDLED', e?.stack ?? e);
+        return json(500, { ok: false, error: { code: 'INTERNAL', message: 'Error interno (ver logs del Worker)' } });
+      }
+    }
     const repo = new D1Repository(env.DB);
     try {
       const certHost = teamDomainHostname(env);
@@ -134,6 +174,7 @@ export default {
         });
         const status = data?.__http ?? 200;
         if (data && typeof data === 'object') delete data.__http;
+        if (status < 400) await maybeNotifyEncargo(env, execCtx, request.method, url.pathname, data);
         return json(status, { ok: true, data });
       }
       if (!isAuthenticatedAttempt(request)) {
@@ -193,6 +234,12 @@ export default {
       } catch (e) {
         await ctx.repo.audit('cron', 'DISPATCH_ERROR', null, { code: e.code ?? 'INTERNAL', message: e.message });
       } finally {
+        try {
+          const nowIso = new Date(event.scheduledTime ?? Date.now()).toISOString();
+          await reviewUnclaimedQueue(ctx.repo, nowIso);
+        } catch {
+          console.info(JSON.stringify({ event: 'encargo_backup_review_error' }));
+        }
         await flushEgress(ctx.repo, 'cron');
       }
     })());

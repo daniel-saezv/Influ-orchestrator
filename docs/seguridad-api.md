@@ -27,6 +27,10 @@ el Worker exige cabecera `Cf-Access-Jwt-Assertion`, verifica firma RS256 con las
 
 El **Cron** del Worker no pasa por HTTP ni por esta comprobación.
 
+## MCP del bot (`/mcp`)
+
+La ruta del conector no usa el JWT de Access. Lleva su propio bearer (`MCP_BEARER_TOKEN`). En el edge hay que dejar **solo** `/mcp` fuera de la aplicación Access que cubre el resto del host, con una aplicación self-hosted de esa ruta y política Bypass. El Worker sigue rechazando la petición si el bearer no coincide. El detalle, sin valores, está en [mcp-grok.md](mcp-grok.md).
+
 ## Límites en el Worker (plan gratuito)
 
 El Worker aplica **rate limiting por IP** en D1 (`migrations/0003_rate_limits.sql`):

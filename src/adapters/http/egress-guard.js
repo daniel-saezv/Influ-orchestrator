@@ -1,6 +1,7 @@
-// Guardia de salida: intercepta fetch() global. En modo MOCK no se permite NINGUNA llamada
-// saliente; cualquier intento se bloquea y queda registrado (prueba TEST 13).
-// Los bindings de Cloudflare (D1, KV) no usan fetch() global y no se ven afectados.
+// Guardia de salida: intercepta fetch() global. En MOCK no hay salida de publicación.
+// allowEgressHost añade solo el host de los certificados Access y, si el webhook está
+// configurado, el host de INFLU_WEBHOOK_URL. Cualquier otro intento se bloquea y queda registrado.
+// Los bindings de Cloudflare (D1, KV, R2) no usan fetch() global y no se ven afectados.
 const attempts = [];
 const extraAllowedHosts = new Set();
 let installed = false;

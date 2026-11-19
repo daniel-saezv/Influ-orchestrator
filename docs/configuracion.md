@@ -17,7 +17,7 @@ Variables del Worker (`deploy/cloudflare.json` → bindings `plain_text`):
 | `ACCESS_TEAM_DOMAIN` | *(vacío)* | Si se define junto con `ACCESS_AUD`, el Worker valida `Cf-Access-Jwt-Assertion`. |
 | `ACCESS_AUD` | *(vacío)* | AUD tag de la app Access; debe coincidir con el JWT. |
 
-**Secrets del Worker** (panel de Cloudflare o `wrangler secret put`): `BOT_HMAC_SECRET` (Grok Bot: lotes, despacho, consultas) y `APPROVER_HMAC_SECRET` (solo decisiones).
+**Secrets del Worker** (panel de Cloudflare o `wrangler secret put`): `BOT_HMAC_SECRET` (Grok Bot: lotes, despacho, consultas), `APPROVER_HMAC_SECRET` (solo decisiones), `MCP_BEARER_TOKEN` (conector MCP de `/mcp`), `INFLU_WEBHOOK_URL` y `INFLU_WEBHOOK_SECRET` (aviso a la rutina al crear un encargo en cola). Cómo conectarlos, sin valores: [mcp-grok.md](mcp-grok.md).
 
 Variables plain text en [`wrangler.toml`](../wrangler.toml) (despliegue CI); `deploy/cloudflare.json` queda como referencia legacy — ver [`docs/despliegue-ci.md`](despliegue-ci.md).
 
