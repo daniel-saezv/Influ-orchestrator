@@ -90,6 +90,7 @@ export function resetFakeApi({ onboarded = false, seedOtherAccount = false } = {
       publish_at: null,
       source_sha256: null,
       created_at: '2026-11-18T10:00:00.000Z',
+      updated_at: '2026-11-18T10:00:00.000Z',
       reads: 2,
       manualBytes: 0,
       released: false,
@@ -154,6 +155,10 @@ function tooLarge(message) {
 function tick() {
   nowValue += 1000
   return new Date(nowValue).toISOString()
+}
+
+function touch(encargo) {
+  encargo.updated_at = new Date(nowValue).toISOString()
 }
 
 function publicAccount(account) {
@@ -288,6 +293,7 @@ async function createEncargo(input = {}) {
     publish_at: null,
     source_sha256: sourceSha,
     created_at: createdAt,
+    updated_at: createdAt,
     reads: 0,
     released: false,
   }
@@ -321,11 +327,13 @@ function publicEncargo(encargo) {
       : null,
     approved: encargo.approved,
     publish_at: encargo.publish_at,
+    account_name: state.accounts.get(encargo.account_id)?.name ?? null,
     synthetic: encargo.synthetic,
     contains_synthetic_media: encargo.synthetic,
     preview,
     source_sha256: encargo.source_sha256,
     created_at: encargo.created_at,
+    updated_at: encargo.updated_at ?? encargo.created_at,
   }
 }
 
@@ -428,7 +436,9 @@ async function getEncargo(encargoId) {
   if (encargo.status === 'queued' || encargo.status === 'preparing') {
     encargo.reads += 1
     const level = Math.min(2, Math.floor(encargo.reads / options.transitionReads))
-    encargo.status = PROCESSING_STATES[level]
+    const next = PROCESSING_STATES[level]
+    if (next !== encargo.status) touch(encargo)
+    encargo.status = next
     if (encargo.status === 'ready') {
       const sha256 = `preview-${encargo.id}-v${encargo.version}`
       encargo.content_hash = sha256
@@ -478,6 +488,7 @@ async function decideEncargo(encargoId, input = {}) {
   if (input.decision === 'approve') {
     encargo.approved = true
     encargo.status = 'approved'
+    touch(encargo)
     return success(publicEncargo(encargo))
   }
   if (input.decision === 'changes') {
@@ -491,6 +502,7 @@ async function decideEncargo(encargoId, input = {}) {
     encargo.preview = null
     encargo.status = 'queued'
     encargo.reads = 0
+    touch(encargo)
     return success(publicEncargo(encargo), 202)
   }
   return badRequest('La decisión debe ser approve o changes.')
@@ -514,6 +526,7 @@ async function cancelEncargo(encargoId) {
   if (encargo.preview) state.media.delete(encargo.preview.sha256)
   encargo.status = 'cancelled'
   encargo.approved = false
+  touch(encargo)
   return success(publicEncargo(encargo))
 }
 
@@ -530,6 +543,7 @@ async function scheduleEncargo(encargoId, input = {}) {
   if (!publishedAt || Number.isNaN(Date.parse(publishedAt))) return badRequest('Indica cuándo publicarla.')
   encargo.publish_at = new Date(publishedAt).toISOString()
   encargo.status = 'scheduled'
+  touch(encargo)
   const mockIds = Object.fromEntries(
     encargo.platforms.map((platform, index) => [
       platform,
@@ -546,6 +560,13 @@ async function scheduleEncargo(encargoId, input = {}) {
   }))
   state.activity.get(encargo.account_id).push(...events)
   return success({ ...publicEncargo(encargo), mock_ids: mockIds })
+}
+
+async function listEncargos() {
+  await sleep()
+  const mine = [...state.encargos.values()].filter((encargo) => requireUserAccount(encargo.account_id))
+  mine.sort((left, right) => String(right.updated_at ?? right.created_at ?? '').localeCompare(String(left.updated_at ?? left.created_at ?? '')))
+  return success({ encargos: mine.map(publicEncargo) })
 }
 
 async function getStreak(accountId) {
@@ -593,6 +614,7 @@ export const routes = {
   'POST /v1/me/accounts': (body) => createAccount(body),
   'PATCH /v1/me/accounts/:id': (body, params) => updateAccount(params.id, body),
   'POST /v1/me/encargos': (body) => createEncargo(body),
+  'GET /v1/me/encargos': () => listEncargos(),
   'POST /v1/me/uploads': (body) => createUpload(body),
   'PUT /v1/me/uploads/:id/parts/:n': (body, params) => uploadPart(params.id, params.n, body),
   'POST /v1/me/uploads/:id/complete': (body, params) => completeUpload(params.id, body),
@@ -650,6 +672,7 @@ export const fakeApi = {
   createAccount,
   updateAccount,
   createEncargo,
+  listEncargos,
   createUpload,
   uploadPart,
   completeUpload,
@@ -669,6 +692,7 @@ export {
   createAccount,
   updateAccount,
   createEncargo,
+  listEncargos,
   createUpload,
   uploadPart,
   completeUpload,

@@ -8,6 +8,7 @@ import {
   Flame,
   History,
   Inbox,
+  List,
   LoaderCircle,
   Monitor,
   Moon,
@@ -24,6 +25,7 @@ import {
 import realApi, { sha256Hex } from './api/api.js'
 import { Badge } from './components/ui/badge.jsx'
 import { Button } from './components/ui/button.jsx'
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './components/ui/empty.jsx'
 import { Field, FieldDescription, FieldLabel } from './components/ui/field.jsx'
 import { Progress } from './components/ui/progress.jsx'
 import { Skeleton } from './components/ui/skeleton.jsx'
@@ -52,14 +54,71 @@ const SAFE_PREVIEW_TYPES = new Set([
 ])
 const TABS = [
   { id: 'studio', label: 'Estudio', icon: Clapperboard },
+  { id: 'encargos', label: 'Encargos', icon: List },
   { id: 'history', label: 'Historial', icon: History },
   { id: 'profile', label: 'Tú', icon: UserRound },
 ]
 const STAGES = [
-  { id: 'queued', label: 'Recibido' },
-  { id: 'preparing', label: 'En montaje' },
-  { id: 'ready', label: 'Listo para mirar' },
+  { id: 'queued', label: 'En cola' },
+  { id: 'preparing', label: 'En marcha' },
+  { id: 'ready', label: 'Listo para revisar' },
 ]
+const TRACKED_SCREENS = new Set(['preparing', 'preview', 'cancelled', 'done'])
+const STATUS_LABELS = {
+  draft: 'Borrador',
+  queued: 'En cola',
+  claimed: 'En marcha',
+  preparing: 'En marcha',
+  ready: 'Listo para revisar',
+  approved: 'Aprobado',
+  scheduled: 'Programado',
+  cancelled: 'Cancelado',
+  failed: 'Fallido',
+}
+
+function statusLabel(status) {
+  return STATUS_LABELS[status] ?? 'En marcha'
+}
+
+function screenForStatus(status) {
+  if (status === 'ready' || status === 'approved') return 'preview'
+  if (status === 'cancelled') return 'cancelled'
+  if (status === 'scheduled') return 'done'
+  return 'preparing'
+}
+
+function stageIndexFor(status) {
+  if (status === 'claimed' || status === 'preparing') return 1
+  if (status === 'ready' || status === 'approved' || status === 'scheduled') return 2
+  return 0
+}
+
+function readRoute() {
+  const path = window.location.pathname.replace(/\/+$/, '') || '/'
+  if (path === '/encargos') return { name: 'encargos' }
+  const match = /^\/encargos\/([^/]+)$/.exec(path)
+  if (match) return { name: 'encargo', id: decodeURIComponent(match[1]) }
+  return { name: 'home' }
+}
+
+function pathFor(screen, encargoId) {
+  if (screen === 'encargos') return '/encargos'
+  if (encargoId && TRACKED_SCREENS.has(screen)) return `/encargos/${encodeURIComponent(encargoId)}`
+  return '/'
+}
+
+function formatWhen(value) {
+  if (!value) return 'Sin fecha'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Sin fecha'
+  return date.toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+function encargoTitle(item) {
+  const note = item?.note?.trim()
+  if (note) return note.split('\n')[0]
+  return item?.kind === 'edit' ? 'Archivos' : 'Una idea'
+}
 
 const tap = () => window.navigator.vibrate?.(8)
 
@@ -72,12 +131,13 @@ function Wordmark() {
   )
 }
 
-function TopBar({ onBack }) {
+function TopBar({ onBack, backLabel = 'Volver' }) {
   return (
     <header className="topbar">
       {onBack ? (
-        <Button variant="ghost" size="icon" aria-label="Volver" className="back-button" onClick={onBack}>
-          <ArrowLeft aria-hidden="true" />
+        <Button variant="ghost" className="back-button back-text" onClick={onBack}>
+          <ArrowLeft aria-hidden="true" data-icon="inline-start" />
+          {backLabel}
         </Button>
       ) : <Wordmark />}
       <span className="mock-pill"><span className="mock-dot" aria-hidden="true" />Simulación</span>
@@ -306,6 +366,7 @@ function App({ api = realApi }) {
   const [files, setFiles] = useState([])
   const [platforms, setPlatforms] = useState(['YouTube'])
   const [encargo, setEncargo] = useState(null)
+  const [encargos, setEncargos] = useState(null)
   const [approved, setApproved] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
@@ -320,13 +381,28 @@ function App({ api = realApi }) {
   const installed = typeof window !== 'undefined' && window.matchMedia?.('(display-mode: standalone)')?.matches
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const account = me?.accounts.find((item) => item.id === accountId) ?? null
+  const encargoIdRef = useRef(null)
+  const meRef = useRef(null)
+  const screenRef = useRef(screen)
+  const listRequest = useRef(0)
 
-  const go = useCallback((next, to = 'forward') => {
+  const syncRoute = useCallback((next, id, historyMode = 'push') => {
+    const path = pathFor(next, id)
+    if (window.location.pathname === path) return
+    const state = { screen: next }
+    if (historyMode === 'replace') window.history.replaceState(state, '', path)
+    else if (historyMode !== 'none') window.history.pushState(state, '', path)
+  }, [])
+
+  const go = useCallback((next, to = 'forward', historyMode = 'push') => {
     setDirection(to)
     setError('')
+    if (next === 'encargos') setEncargos(null)
     setScreen(next)
+    screenRef.current = next
     window.scrollTo?.({ top: 0 })
-  }, [])
+    syncRoute(next, encargoIdRef.current, historyMode)
+  }, [syncRoute])
 
   const notify = useCallback((message, tone = 'ok') => {
     setToast({ message, tone, id: Date.now() })
@@ -367,15 +443,77 @@ function App({ api = realApi }) {
     loadStreaks(data.accounts)
   }, [loadStreaks])
 
-  const enter = useCallback((response) => {
+  const loadEncargos = useCallback(async () => {
+    const requestId = ++listRequest.current
+    const response = await api.listEncargos()
+    if (requestId !== listRequest.current) return
+    if (response.ok) setEncargos(response.data.encargos)
+    else {
+      setEncargos([])
+      setError(response.error.message)
+    }
+  }, [api])
+
+  const applyEncargo = useCallback(async (data, historyMode = 'push') => {
+    encargoIdRef.current = data.id
+    setEncargo(data)
+    if (data.account_id) setAccountId(data.account_id)
+    setApproved(data.status === 'approved' || data.status === 'scheduled')
+    setPosterOnly(false)
+    setPreview(null)
+    if (data.status === 'scheduled') {
+      setResult(data)
+      const at = Date.parse(data.publish_at ?? '')
+      setScheduleMode(Number.isFinite(at) && at > Date.now() + 60_000 ? 'at' : 'now')
+    } else {
+      setResult(null)
+    }
+    setChangeOpen(false)
+    setUploading(false)
+    if ((data.status === 'ready' || data.status === 'approved') && data.result_sha256) {
+      const media = await api.getMedia(data.result_sha256)
+      if (media.ok) setPreview(media.data)
+      else setPosterOnly(true)
+    }
+    const next = screenForStatus(data.status)
+    setDirection(historyMode === 'none' ? 'back' : 'forward')
+    setError('')
+    setScreen(next)
+    window.scrollTo?.({ top: 0 })
+    syncRoute(next, data.id, historyMode)
+  }, [api, syncRoute])
+
+  const enter = useCallback(async (response) => {
     if (!response.ok) {
       setError(response.error.message)
       setScreen('offline')
       return
     }
     adoptMe(response.data)
-    setScreen(response.data.needs_guide ? 'welcome' : 'studio')
-  }, [adoptMe])
+    if (response.data.needs_guide) {
+      setScreen('welcome')
+      syncRoute('welcome', null, 'replace')
+      return
+    }
+    const route = readRoute()
+    if (route.name === 'encargos') {
+      setEncargos(null)
+      setScreen('encargos')
+      return
+    }
+    if (route.name === 'encargo') {
+      const loaded = await api.getEncargo(route.id)
+      if (!loaded.ok) {
+        setError(loaded.error.message)
+        setScreen('encargos')
+        syncRoute('encargos', null, 'replace')
+        return
+      }
+      await applyEncargo(loaded.data, 'replace')
+      return
+    }
+    setScreen('studio')
+  }, [adoptMe, api, applyEncargo, syncRoute])
 
   const loadMe = useCallback(() => api.getMe().then(enter), [api, enter])
 
@@ -398,6 +536,66 @@ function App({ api = realApi }) {
       stopped = true
     }
   }, [api, screen, accountId])
+
+  useEffect(() => {
+    encargoIdRef.current = encargo?.id ?? null
+    meRef.current = me
+    screenRef.current = screen
+  }, [encargo?.id, me, screen])
+
+  useEffect(() => {
+    if (screen !== 'encargos') return undefined
+    let stopped = false
+    const requestId = ++listRequest.current
+    api.listEncargos().then((response) => {
+      if (stopped || requestId !== listRequest.current) return
+      if (response.ok) setEncargos(response.data.encargos)
+      else {
+        setEncargos([])
+        setError(response.error.message)
+      }
+    })
+    return () => {
+      stopped = true
+    }
+  }, [api, screen])
+
+  useEffect(() => {
+    if (!encargo?.id || !TRACKED_SCREENS.has(screen)) return
+    syncRoute(screen, encargo.id, 'push')
+  }, [encargo?.id, screen, syncRoute])
+
+  useEffect(() => {
+    const onPop = () => {
+      const route = readRoute()
+      setDirection('back')
+      setError('')
+      if (route.name === 'encargos') {
+        screenRef.current = 'encargos'
+        setEncargos(null)
+        setScreen('encargos')
+        return
+      }
+      if (route.name === 'home') {
+        const profile = meRef.current
+        const next = !profile ? 'loading' : profile.needs_guide ? 'welcome' : 'studio'
+        screenRef.current = next
+        setScreen(next)
+        return
+      }
+      api.getEncargo(route.id).then((response) => {
+        if (readRoute().id !== route.id) return
+        if (!response.ok) {
+          setError(response.error.message)
+          setScreen('encargos')
+          return
+        }
+        applyEncargo(response.data, 'none')
+      })
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [api, applyEncargo])
 
   const openTab = (tab) => {
     if (tab === screen) return
@@ -459,6 +657,10 @@ function App({ api = realApi }) {
 
   const fail = (message, back = 'studio') => {
     setUploading(false)
+    if (screenRef.current !== 'preparing' && screenRef.current !== back) {
+      notify(message, 'error')
+      return
+    }
     go(back, 'back')
     setError(message)
   }
@@ -475,6 +677,8 @@ function App({ api = realApi }) {
     setPosterOnly(false)
     setUploadProgress(0)
     setUploading(kind === 'edit')
+    encargoIdRef.current = null
+    setEncargo(null)
     go('preparing')
     const created = await api.createEncargo({
       account_id: account.id,
@@ -488,6 +692,7 @@ function App({ api = realApi }) {
     }
     let activeEncargo = created.data
     setEncargo(activeEncargo)
+    if (screenRef.current === 'encargos') loadEncargos()
     if (kind === 'edit') {
       const totalParts = files.reduce((sum, file) => sum + Math.max(1, Math.ceil(file.size / PART_BYTES)), 0)
       let sentParts = 0
@@ -544,6 +749,7 @@ function App({ api = realApi }) {
         window.localStorage.removeItem(UPLOAD_KEY)
       }
       setUploading(false)
+      if (screenRef.current === 'encargos') loadEncargos()
     }
   }
 
@@ -561,19 +767,33 @@ function App({ api = realApi }) {
         go('cancelled', 'back')
         return
       }
-      if (response.data.status === 'ready') {
+      if (response.data.status === 'scheduled') {
+        setResult(response.data)
+        const at = Date.parse(response.data.publish_at ?? '')
+        setScheduleMode(Number.isFinite(at) && at > Date.now() + 60_000 ? 'at' : 'now')
+        go('done')
+        return
+      }
+      if (response.data.status === 'failed') return
+      if (response.data.status === 'ready' || response.data.status === 'approved') {
         const media = await api.getMedia(response.data.result_sha256)
         if (stopped) return
         if (media.ok) setPreview(media.data)
+        else setPosterOnly(true)
         tap()
         go('preview')
       }
     }
     poll()
     const timer = window.setInterval(poll, 15_000)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') poll()
+    }
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
       stopped = true
       window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [api, screen, encargoId, uploading, go])
 
@@ -637,6 +857,21 @@ function App({ api = realApi }) {
     window.localStorage.removeItem(UPLOAD_KEY)
     notify('Encargo cancelado')
     go('cancelled', 'back')
+  }
+
+  const openListed = async (item) => {
+    const data = await run('open', () => api.getEncargo(item.id))
+    if (!data) return
+    await applyEncargo(data)
+  }
+
+  const cancelListed = async (item) => {
+    const cancelled = await run('cancel', () => api.cancelEncargo(item.id))
+    if (!cancelled) return
+    setEncargos((current) => current?.map((row) => (
+      row.id === item.id ? { ...row, ...cancelled, id: row.id, status: cancelled.status ?? 'cancelled' } : row
+    )))
+    notify('Encargo cancelado')
   }
 
   const requestChanges = async (event) => {
@@ -732,6 +967,11 @@ function App({ api = realApi }) {
     <>
       <TopBar />
       <Heading eyebrow={me?.display_name ? `Hola, ${me.display_name}` : 'Hola'}>¿Qué <em>grabamos</em> hoy?</Heading>
+      <Button variant="outline" className="entry" onClick={() => openTab('encargos')}>
+        <List aria-hidden="true" data-icon="inline-start" />
+        Mis encargos
+        <ArrowRight aria-hidden="true" data-icon="inline-end" />
+      </Button>
       <Section label="Cuenta" id="label-account">
         <div className="chip-row">
           <ToggleGroup type="single" className="chips" value={accountId ?? ''} onValueChange={(value) => { if (value) { tap(); setAccountId(value) } }} aria-label="Cuenta">
@@ -798,29 +1038,52 @@ function App({ api = realApi }) {
 
   if (screen === 'preparing') {
     const status = uploading ? 'uploading' : encargo?.status ?? 'queued'
-    const stageIndex = Math.max(0, STAGES.findIndex((stage) => stage.id === status))
-    const eyebrow = uploading ? `Subiendo · ${uploadProgress}%` : encargo?.version > 1 ? `Toma ${encargo.version}` : 'En marcha'
+    const failed = status === 'failed'
+    const draft = status === 'draft'
+    const stageIndex = stageIndexFor(status)
+    const eyebrow = uploading
+      ? `Subiendo · ${uploadProgress}%`
+      : encargo?.version > 1
+        ? `Toma ${encargo.version}`
+        : statusLabel(status)
+    const hint = uploading
+      ? 'No cierres la app hasta que termine la subida.'
+      : failed
+        ? 'No he podido terminarlo. Puedes cerrar la app; el estado sigue aquí cuando vuelvas.'
+        : draft
+          ? 'La subida no terminó. Vuelve al inicio y elige los mismos archivos para continuarla.'
+          : 'Puedes cerrar la app; aquí verás el estado de tu encargo cuando vuelvas.'
     view = (
       <>
-        <TopBar />
-        <Heading eyebrow={eyebrow}>Revelando <em>tu toma.</em></Heading>
-        <div className="darkroom" aria-hidden="true">
-          <span className="darkroom-frame"><Skeleton className="h-full w-full rounded-[inherit]" /></span>
-          <span className="darkroom-rec"><span className="rec-dot" />REC</span>
-        </div>
-        <Progress value={uploading ? uploadProgress : [30, 66, 100][stageIndex]} aria-label="Preparando tu encargo" />
-        <ol className="stages">
-          {STAGES.map((stage, index) => (
-            <li key={stage.id} data-state={uploading ? 'todo' : index < stageIndex ? 'done' : index === stageIndex ? 'now' : 'todo'}>
-              <span className="stage-dot" aria-hidden="true">{index < stageIndex && !uploading ? <Check /> : null}</span>{stage.label}
-            </li>
-          ))}
-        </ol>
-        <p className="fine">Puedes dejarlo en segundo plano. Miro el estado cada 15 segundos, solo con la app visible.</p>
+        <TopBar onBack={() => go('encargos', 'back')} backLabel="Mis encargos" />
+        <Heading eyebrow={eyebrow}>{failed ? <>No ha <em>salido.</em></> : <>Revelando <em>tu toma.</em></>}</Heading>
+        {!failed && (
+          <div className="darkroom" aria-hidden="true">
+            <span className="darkroom-frame"><Skeleton className="h-full w-full rounded-[inherit]" /></span>
+            <span className="darkroom-rec"><span className="rec-dot" />REC</span>
+          </div>
+        )}
+        {failed && <Badge variant="outline" className="status-pill"><XCircle aria-hidden="true" />Fallido</Badge>}
+        {!failed && <Progress value={uploading ? uploadProgress : [30, 66, 100][stageIndex]} aria-label="Preparando tu encargo" />}
+        {!failed && (
+          <ol className="stages">
+            {STAGES.map((stage, index) => (
+              <li key={stage.id} data-state={uploading ? 'todo' : index < stageIndex ? 'done' : index === stageIndex ? 'now' : 'todo'}>
+                <span className="stage-dot" aria-hidden="true">{index < stageIndex && !uploading ? <Check /> : null}</span>{stage.label}
+              </li>
+            ))}
+          </ol>
+        )}
+        <p className="fine">{hint}</p>
         <ErrorLine>{error}</ErrorLine>
       </>
     )
-    cta = <CancelEncargoAction encargo={encargo} busy={busy} onConfirm={cancelActiveEncargo} />
+    cta = (
+      <div className="cta-stack">
+        <Button size="lg" variant="outline" className="cta-secondary" onClick={() => go('studio', 'back')}>Inicio</Button>
+        <CancelEncargoAction encargo={encargo} busy={busy} onConfirm={cancelActiveEncargo} />
+      </div>
+    )
   }
 
   if (screen === 'preview') {
@@ -828,7 +1091,7 @@ function App({ api = realApi }) {
     const playable = preview?.url && preview.content_type?.startsWith('video/') && !posterOnly
     view = (
       <>
-        <TopBar />
+        <TopBar onBack={() => go('encargos', 'back')} backLabel="Mis encargos" />
         <Heading eyebrow={`Versión ${encargo?.version ?? 1}`}>Mira <em>lo que he preparado</em></Heading>
         <SwipeDeck disabled={Boolean(busy)} onRight={approveAndSchedule} onLeft={() => setChangeOpen(true)}>
           <div className="frame">
@@ -885,7 +1148,7 @@ function App({ api = realApi }) {
   if (screen === 'cancelled') {
     view = (
       <>
-        <TopBar />
+        <TopBar onBack={() => go('encargos', 'back')} backLabel="Mis encargos" />
         <Heading eyebrow="Estado: cancelado">Encargo <em>cancelado</em></Heading>
         <Badge variant="secondary" className="status-pill"><XCircle aria-hidden="true" />Cancelado</Badge>
         <p className="lead">Ya no se preparará ni se publicará en la simulación.</p>
@@ -912,7 +1175,7 @@ function App({ api = realApi }) {
     const later = scheduleMode === 'at'
     view = (
       <>
-        <TopBar />
+        <TopBar onBack={() => go('encargos', 'back')} backLabel="Mis encargos" />
         <div className="confetti" aria-hidden="true">{Array.from({ length: 14 }, (_, index) => <i key={index} />)}</div>
         <div className="stamp" aria-hidden="true"><Check /></div>
         <Heading eyebrow="Simulación terminada">¡Corten! <em>{later ? 'Queda programado.' : 'Está publicado.'}</em></Heading>
@@ -931,6 +1194,48 @@ function App({ api = realApi }) {
       </div>
     )
   }
+
+  if (screen === 'encargos') view = (
+    <>
+      <TopBar />
+      <Heading eyebrow="Tu camerino">Mis <em>encargos</em></Heading>
+      {encargos === null ? <ListSkeleton /> : encargos.length === 0 ? (
+        <Empty className="min-h-0 flex-none items-start rounded-2xl border border-dashed border-input p-6 text-left">
+          <EmptyHeader className="items-start text-left">
+            <EmptyMedia variant="icon"><Inbox /></EmptyMedia>
+            <EmptyTitle>Todavía no tienes encargos</EmptyTitle>
+            <EmptyDescription>Cuando prepares una idea, el estado queda aquí aunque cierres la app.</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent className="items-start">
+            <Button variant="outline" onClick={() => openTab('studio')}>Preparar el primero</Button>
+          </EmptyContent>
+        </Empty>
+      ) : (
+        <ul className="feed">
+          {encargos.map((item) => {
+            const tone = item.status === 'cancelled' || item.status === 'failed' ? 'status-pill' : undefined
+            const variant = item.status === 'ready' ? 'default' : 'secondary'
+            return (
+              <li key={item.id} className="encargo-row">
+                <button type="button" className="encargo-open" onClick={() => openListed(item)}>
+                  <span>
+                    <strong>{encargoTitle(item)}</strong>
+                    <span>
+                      {(me?.accounts.length ?? 0) > 1 && `${item.account_name ?? account?.name ?? 'Cuenta'} · `}
+                      Actualizado {formatWhen(item.updated_at ?? item.created_at)}
+                    </span>
+                  </span>
+                  <Badge variant={variant} className={tone}>{statusLabel(item.status)}</Badge>
+                </button>
+                <CancelEncargoAction encargo={item} busy={busy} onConfirm={() => cancelListed(item)} />
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <ErrorLine>{error}</ErrorLine>
+    </>
+  )
 
   if (screen === 'history') view = (
     <>

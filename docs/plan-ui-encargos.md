@@ -290,6 +290,7 @@ JWT de Access. Cada ruta resuelve el recurso con `users.email = claim`. Si el id
 | `POST /v1/me/accounts` | Nueva cuenta de creador. |
 | `PATCH /v1/me/accounts/:id` | Cambia el nombre de esa cuenta. |
 | `POST /v1/me/encargos` | Crea el encargo en una cuenta propia. |
+| `GET /v1/me/encargos` | Encargos de ese correo, del más reciente al más antiguo (máximo 100). Cada uno trae estado, cuenta, nota y fechas. |
 | `POST /v1/me/uploads` | Abre sesión si el tamaño ≤ 150 MB y los topes de R2 dan. |
 | `PUT /v1/me/uploads/:id/parts/:n` | Una parte de como mucho 5 MiB. El cuerpo va a R2 con el SHA-256 que mandó el teléfono. |
 | `POST /v1/me/uploads/:id/complete` | Marca la sesión completa y enlaza el origen. No llama a R2. |

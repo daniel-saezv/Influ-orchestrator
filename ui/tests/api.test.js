@@ -4,6 +4,7 @@ import {
   createUpload,
   getMedia,
   getMe,
+  listEncargos,
   scheduleEncargo,
   uploadPart,
 } from '../src/api/api.js'
@@ -32,6 +33,33 @@ describe('Worker API client', () => {
     }))
     expect(response.data.accounts[0].id).toBe('acc-1')
     expect(response.data.needs_guide).toBe(false)
+  })
+
+  it('lists the person encargos and keeps the server id', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      data: {
+        encargos: [{
+          encargo_id: 'enc-1',
+          status: 'claimed',
+          updated_at: '2026-11-19T12:00:00.000Z',
+          created_at: '2026-11-19T11:00:00.000Z',
+        }],
+      },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetch)
+
+    const response = await listEncargos()
+
+    expect(fetch).toHaveBeenCalledWith('/v1/me/encargos', expect.objectContaining({
+      credentials: 'same-origin',
+      method: 'GET',
+    }))
+    expect(response.data.encargos[0]).toMatchObject({
+      id: 'enc-1',
+      status: 'claimed',
+      updated_at: '2026-11-19T12:00:00.000Z',
+    })
   })
 
   it('sends upload creation JSON without control fields', async () => {
@@ -116,6 +144,7 @@ describe('Worker API client', () => {
     expect(response.data.url).toBe('blob:preview')
     expect(createObjectURL).toHaveBeenCalled()
     expect(api.cancelEncargo).toEqual(expect.any(Function))
+    expect(api.listEncargos).toEqual(expect.any(Function))
     expect(api.listConnections).toEqual(expect.any(Function))
     expect(api.getConnection).toEqual(expect.any(Function))
   })
