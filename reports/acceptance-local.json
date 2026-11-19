@@ -1,10 +1,10 @@
 {
   "target": "local",
   "base_host": "local.test",
-  "main_batch": "LOTE-T2611182339",
-  "executed_at": "2026-11-18T23:39:37.086Z",
-  "passed": 17,
-  "total": 17,
+  "main_batch": "LOTE-T2611190049",
+  "executed_at": "2026-11-19T00:49:55.681Z",
+  "passed": 19,
+  "total": 19,
   "health": {
     "status": 200,
     "ok": true,
@@ -23,7 +23,7 @@
       "id": "TEST 01",
       "name": "Crear un lote con tres publicaciones de ejemplo",
       "pass": true,
-      "ms": 11,
+      "ms": 15,
       "log": [
         "media P01_fotos_nocturnas.mp4 1975 B sha256=f90c941e9022… -> media/f90c941e9022ea27d675d4bddcf8ac29187839e4d20696a97193661ff078e1ee",
         "media P02_rutina_manana.mp4 1975 B sha256=f90c941e9022… -> media/f90c941e9022ea27d675d4bddcf8ac29187839e4d20696a97193661ff078e1ee",
@@ -34,10 +34,10 @@
       "id": "TEST 02",
       "name": "Recibir el lote desde Grok Bot y comprobar que queda registrado",
       "pass": true,
-      "ms": 19,
+      "ms": 8,
       "log": [
-        "registrado LOTE-T2611182339 v1 hash=2b89efbc9592d14b88c7f0a412b12a933d22c31245621ccfa6125dcd63433276",
-        "publicaciones: LOTE-T2611182339-V1-P01=VALIDATED, LOTE-T2611182339-V1-P02=VALIDATED, LOTE-T2611182339-V1-P03=VALIDATED",
+        "registrado LOTE-T2611190049 v1 hash=48e3460ce5e4ab322bbcb57f5dcbc6dfb8fd9c997aead9f90e305776cf99a8a5",
+        "publicaciones: LOTE-T2611190049-V1-P01=VALIDATED, LOTE-T2611190049-V1-P02=VALIDATED, LOTE-T2611190049-V1-P03=VALIDATED",
         "reenvío idéntico => idempotent=true"
       ]
     },
@@ -45,16 +45,16 @@
       "id": "TEST 03",
       "name": "Comprobar que se muestra correctamente para revisión",
       "pass": true,
-      "ms": 21,
+      "ms": 13,
       "log": [
-        "presentación de revisión: 52 líneas -> reports/review-local-LOTE-T2611182339.md"
+        "presentación de revisión: 52 líneas -> reports/review-local-LOTE-T2611190049.md"
       ]
     },
     {
       "id": "TEST 04",
       "name": "Intentar publicar sin aprobación: debe bloquearse",
       "pass": true,
-      "ms": 11,
+      "ms": 5,
       "log": [
         "publish -> 409 APPROVAL_REQUIRED (estado del lote READY_FOR_REVIEW; no hay aprobación válida; registro de aprobación del lote incoherente)",
         "dispatch -> 0 lotes procesados"
@@ -64,19 +64,19 @@
       "id": "TEST 05",
       "name": "Aprobar el lote",
       "pass": true,
-      "ms": 4,
+      "ms": 2,
       "log": [
-        "APROBAR LOTE-T2611182339 v1 -> APPROVED (confirmed_by=orchestrator-d1, approved_at=2026-11-18T23:39:33.425Z)"
+        "APROBAR LOTE-T2611190049 v1 -> APPROVED (confirmed_by=orchestrator-d1, approved_at=2026-11-19T00:49:51.880Z)"
       ]
     },
     {
       "id": "TEST 06",
       "name": "Modificar un copy después de aprobarlo: la aprobación debe invalidarse",
       "pass": true,
-      "ms": 7,
+      "ms": 5,
       "log": [
-        "v2 hash=60e7b806708c12e27e7e22a0ee8cb63b3df91338fb24bd72faed54ff9b76918a",
-        "aprobación v1 invalidada: \"Contenido modificado: versión 2 (huella 60e7b806708c…)\"",
+        "v2 hash=cc7b165b9557ff67440d2e8c0bcfdd797416cb717285830a22732ea25fd85a73",
+        "aprobación v1 invalidada: \"Contenido modificado: versión 2 (huella cc7b165b9557…)\"",
         "aprobar v1 => 409 VERSION_MISMATCH; publicar => 409 APPROVAL_REQUIRED"
       ]
     },
@@ -86,18 +86,18 @@
       "pass": true,
       "ms": 2,
       "log": [
-        "APROBAR LOTE-T2611182339 v2 -> APPROVED"
+        "APROBAR LOTE-T2611190049 v2 -> APPROVED"
       ]
     },
     {
       "id": "TEST 08",
       "name": "Simular la publicación de las tres piezas en YouTube MOCK",
       "pass": true,
-      "ms": 12,
+      "ms": 8,
       "log": [
-        "LOTE-T2611182339-V2-P01: PUBLISHED MOCK-YT-LLc9i0aje1w https://youtube.mock.invalid/watch?v=MOCK-YT-LLc9i0aje1w",
-        "LOTE-T2611182339-V2-P02: PUBLISHED MOCK-YT-icTwPN93KD8 https://youtube.mock.invalid/watch?v=MOCK-YT-icTwPN93KD8",
-        "LOTE-T2611182339-V2-P03: PUBLISHED MOCK-YT-SZ_6pk6CFtM https://youtube.mock.invalid/watch?v=MOCK-YT-SZ_6pk6CFtM"
+        "LOTE-T2611190049-V2-P01: PUBLISHED MOCK-YT-Yp3SAn0hItQ https://youtube.mock.invalid/watch?v=MOCK-YT-Yp3SAn0hItQ",
+        "LOTE-T2611190049-V2-P02: PUBLISHED MOCK-YT-XGf20I20T1o https://youtube.mock.invalid/watch?v=MOCK-YT-XGf20I20T1o",
+        "LOTE-T2611190049-V2-P03: PUBLISHED MOCK-YT-DBo0dNGZkPM https://youtube.mock.invalid/watch?v=MOCK-YT-DBo0dNGZkPM"
       ]
     },
     {
@@ -106,17 +106,17 @@
       "pass": true,
       "ms": 0,
       "log": [
-        "IDs: MOCK-YT-LLc9i0aje1w, MOCK-YT-icTwPN93KD8, MOCK-YT-SZ_6pk6CFtM"
+        "IDs: MOCK-YT-Yp3SAn0hItQ, MOCK-YT-XGf20I20T1o, MOCK-YT-DBo0dNGZkPM"
       ]
     },
     {
       "id": "TEST 10",
       "name": "Simular un error temporal y comprobar el reintento",
       "pass": true,
-      "ms": 3525,
+      "ms": 3526,
       "log": [
-        "intento 1: RETRY_PENDING PUBLISH_ERROR — siguiente reintento 2026-11-18T23:39:35.455Z",
-        "intento 2: PUBLISHED MOCK-YT-NfrAF4M1sC4 (attempts=2)",
+        "intento 1: RETRY_PENDING PUBLISH_ERROR — siguiente reintento 2026-11-19T00:49:53.900Z",
+        "intento 2: PUBLISHED MOCK-YT-6SDAvBE2HX8 (attempts=2)",
         "publish_permanent: FAILED PUBLISH_ERROR retryable=false",
         "auth_error: FAILED AUTH_ERROR retryable=false"
       ]
@@ -125,7 +125,7 @@
       "id": "TEST 11",
       "name": "Volver a ejecutar el workflow y comprobar que no duplica publicaciones completadas",
       "pass": true,
-      "ms": 4,
+      "ms": 5,
       "log": [
         "3 ejecuciones adicionales (dispatch lote, dispatch global, publish) -> 0 reprocesadas; eventos PUBLISHED=3"
       ]
@@ -134,25 +134,25 @@
       "id": "TEST 12",
       "name": "Consultar los resultados desde Grok Bot",
       "pass": true,
-      "ms": 1,
+      "ms": 2,
       "log": [
-        "informe -> reports/results-local-LOTE-T2611182339.md"
+        "informe -> reports/results-local-LOTE-T2611190049.md"
       ]
     },
     {
       "id": "TEST 13",
       "name": "Comprobar que no se ha hecho ninguna llamada de publicación a una red social real",
       "pass": true,
-      "ms": 5,
+      "ms": 7,
       "log": [
-        "health.mode=mock; live_enabled_in_build=false; egress_log.total=0; hosts contactados por el cliente: local.test; fetch() en src/: solo egress-guard.js"
+        "health.mode=mock; live_enabled_in_build=false; egress_log.total=0; hosts contactados por el cliente: local.test; fetch en src/: guardia, certificados Access y el webhook de encargos"
       ]
     },
     {
       "id": "EXTRA S1",
       "name": "Seguridad: peticiones sin firma, firma inválida, replay, clave equivocada y forzar LIVE",
       "pass": true,
-      "ms": 5,
+      "ms": 4,
       "log": [
         "sin firma=401, firma inválida=401, replay=401 REPLAY_DETECTED, aprobar con clave bot=403, batch con mode=live=400, dispatch con mode=live => sigue mock"
       ]
@@ -161,16 +161,16 @@
       "id": "EXTRA S2",
       "name": "Programación: una publicación aprobada con fecha futura no se publica antes de su hora",
       "pass": true,
-      "ms": 7,
+      "ms": 8,
       "log": [
-        "scheduled_at=2026-11-21T23:39:36.994Z -> SCHEDULED, omitida (\"aún no es la hora programada\"); RECHAZAR -> REJECTED y publicación CANCELLED"
+        "scheduled_at=2026-11-22T00:49:55.440Z -> SCHEDULED, omitida (\"aún no es la hora programada\"); RECHAZAR -> REJECTED y publicación CANCELLED"
       ]
     },
     {
       "id": "EXTRA S3",
       "name": "Solicitar cambios: el lote no puede aprobarse sin una versión nueva",
       "pass": true,
-      "ms": 16,
+      "ms": 7,
       "log": [
         "CAMBIOS -> CHANGES_REQUESTED; APROBAR misma versión -> 409; v2 -> READY_FOR_REVIEW -> APPROVED"
       ]
@@ -179,9 +179,27 @@
       "id": "EXTRA S4",
       "name": "Aislamiento: otro correo recibe 404 y un service token no abre /v1/me",
       "pass": true,
-      "ms": 68,
+      "ms": 62,
       "log": [
         "bob recibe 404 en encargo, pieza, racha, actividad y conexión; service token 403 en /v1/me; conexiones propias vacías"
+      ]
+    },
+    {
+      "id": "EXTRA S5",
+      "name": "Bot HMAC: firma inválida, reclamo doble y hash que no cuadra",
+      "pass": true,
+      "ms": 90,
+      "log": [
+        "firma inválida=401; reclamo doble=409; file_sha256 distinto=409 y status failed; el bucle no genera si los bytes no cuadran; cola vacía sin Imagine"
+      ]
+    },
+    {
+      "id": "EXTRA H2",
+      "name": "MCP sin auth, sin aprobar, y el webhook no bloquea la cola",
+      "pass": true,
+      "ms": 74,
+      "log": [
+        "MCP sin bearer=401; tools/list no tiene aprobar ni publicar; sin URL no hay POST; un POST que falla deja el encargo en cola"
       ]
     }
   ]

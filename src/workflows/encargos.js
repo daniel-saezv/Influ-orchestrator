@@ -287,6 +287,58 @@ async function botEncargo(repo, encargoId) {
   };
 }
 
+export async function reviewEncargoForBot(repo, encargoId) {
+  if (!UUID_RE.test(encargoId ?? '')) throw NOT_FOUND();
+  const row = await repo.encargoById(encargoId);
+  if (!row) throw NOT_FOUND();
+  const view = await botEncargo(repo, encargoId);
+  return { ...view, content_hash: row.content_hash ?? null, synthetic: row.synthetic };
+}
+
+export async function readClaimedOrigin(repo, { encargoId, now, r2, actor = 'mcp' }) {
+  if (!UUID_RE.test(encargoId ?? '')) throw NOT_FOUND();
+  const row = await repo.encargoById(encargoId);
+  if (!row) throw NOT_FOUND();
+  if (row.status !== 'claimed') throw err('CONFLICT', 'El encargo no está reclamado', 409);
+  const assets = await repo.listSourceAssets(encargoId);
+  const checked = [];
+  for (const asset of assets) {
+    if (!r2) throw err('R2_UNAVAILABLE', 'El almacenamiento no está disponible', 503);
+    const reserved = await repo.reserveDaily(row.user_id, 'b', now, MAX_CLASS_B_USER, MAX_CLASS_B_GLOBAL);
+    if (!reserved) throw err('QUOTA_EXCEEDED', 'Tope de lecturas alcanzado', 413);
+    let head;
+    try {
+      head = await r2.head(asset.r2_key);
+    } catch {
+      await repo.releaseDaily(row.user_id, 'b', now);
+      throw err('R2_UNAVAILABLE', 'No se pudo leer el origen', 503);
+    }
+    checked.push({
+      r2_key: asset.r2_key,
+      sha256: asset.sha256,
+      mime: asset.mime,
+      size_bytes: Number(asset.size_bytes),
+      stored_sha256: head?.sha256 ?? null,
+      stored_size: head ? Number(head.size) : null,
+      matches: Boolean(head && head.sha256 === asset.sha256 && Number(head.size) === Number(asset.size_bytes)),
+    });
+  }
+  await repo.audit(actor, 'ENCARGO_ORIGIN_READ', null, {
+    encargo_id: encargoId, account_id: row.account_id, assets: checked.length,
+  }, now);
+  return {
+    encargo_id: row.encargo_id,
+    account_id: row.account_id,
+    kind: row.kind,
+    note: row.note,
+    status: row.status,
+    platforms: row.platforms,
+    version: row.version,
+    file_sha256: await repo.sourceFileSha(encargoId),
+    assets: checked,
+  };
+}
+
 export async function claimEncargo(repo, { encargoId, now, actor = 'grok-bot' }) {
   if (!UUID_RE.test(encargoId ?? '')) throw NOT_FOUND();
   const ok = await repo.claimEncargo(encargoId, now);

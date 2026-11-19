@@ -32,7 +32,7 @@ content/batches/     lotes de contenido (LOTE-0001 de ejemplo)
 n8n/workflows/       plantillas WF-01..04 importables en n8n (no probadas en n8n)
 tests/               unitarios (node:test) y aceptación (local y contra Cloudflare)
 reports/             informes de pruebas
-docs/                arquitectura, contratos, datos, webhooks, instalación, configuración, YouTube LIVE, nuevos adaptadores, limitaciones
+docs/                arquitectura, contratos, datos, webhooks, MCP de Grok Bot, instalación, configuración, YouTube LIVE, nuevos adaptadores, limitaciones
 deploy/              generador de scripts de despliegue vía conector MCP de Cloudflare
 ```
 

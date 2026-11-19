@@ -240,14 +240,22 @@ await T('TEST 13', 'Comprobar que no se ha hecho ninguna llamada de publicación
   eq(e.data.total, 0, 'salidas a Internet registradas por la guardia del Worker');
   const hosts = [...new Set(outbound)];
   assert(hosts.every((x) => x === baseHost), `este proceso solo habló con ${baseHost}: ${hosts.join(', ')}`);
-  // Análisis estático: solo la guardia de salida llama a fetch() en el código del Worker.
+  // Análisis estático: la publicación no llama a fetch. Sí pueden hacerlo la guardia, el canje de certificados Access y el webhook del encargo.
   const offenders = [];
-  const walk = (d) => readdirSync(d).forEach((f) => { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith('.js') && /\bfetch\s*\((?![^)]*\)\s*\{)/.test(readFileSync(p, 'utf8').replace(/\/\/.*$/gm, '')) && !p.endsWith('egress-guard.js')) offenders.push(p); });
+  const allowedFetch = new Set(['egress-guard.js', 'access-jwt.js', 'encargo-webhook.js']);
+  const walk = (d) => readdirSync(d).forEach((f) => {
+    const p = join(d, f);
+    if (statSync(p).isDirectory()) { walk(p); return; }
+    if (!p.endsWith('.js') || allowedFetch.has(f)) return;
+    const src = readFileSync(p, 'utf8').replace(/\/\/.*$/gm, '');
+    const callsFetch = new RegExp(String.raw`\bfetch\s*\((?![^)]*\)\s*\{)`);
+    if (callsFetch.test(src) || /globalThis\.fetch\b/.test(src)) offenders.push(p);
+  });
   walk(join(ROOT, 'src'));
   eq(offenders.length, 0, `archivos con fetch(): ${offenders.join(', ')}`);
   const res = await client.getPublicationResults(MAIN);
   assert(res.data.mock === true && res.data.publications.every((p) => p.provider_mode === 'mock'), 'todo en modo mock');
-  log.push(`health.mode=${h.publisher.mode}; live_enabled_in_build=false; egress_log.total=${e.data.total}; hosts contactados por el cliente: ${hosts.join(', ')}; fetch() en src/: solo egress-guard.js`);
+  log.push(`health.mode=${h.publisher.mode}; live_enabled_in_build=false; egress_log.total=${e.data.total}; hosts contactados por el cliente: ${hosts.join(', ')}; fetch en src/: guardia, certificados Access y el webhook de encargos`);
 });
 
 await T('EXTRA S1', 'Seguridad: peticiones sin firma, firma inválida, replay, clave equivocada y forzar LIVE', async (log) => {
@@ -467,6 +475,92 @@ if (target === 'local') {
     eq(empty.generated, false, 'cola vacía');
     eq(empty.ok, true, 'vuelta vacía');
     log.push('firma inválida=401; reclamo doble=409; file_sha256 distinto=409 y status failed; el bucle no genera si los bytes no cuadran; cola vacía sin Imagine');
+  });
+
+  await T('EXTRA H2', 'MCP sin auth, sin aprobar, y el webhook no bloquea la cola', async (log) => {
+    const { createD1Shim, createKvShim } = await import('../helpers/d1-shim.mjs');
+    const { setEncargoWebhookTransport } = await import('../../src/adapters/http/encargo-webhook.js');
+    const aud = 'aud-h2-aceptacion';
+    const signer = createAccessSigner();
+    const key = await cryptoKeyFromPublic(signer.publicKey);
+    workerMod.setAccessJwtDeps({ getCertKeys: async () => new Map([['test-kid', key]]) });
+    const tokenMcp = 'local-test-mcp-bearer-aceptacion-0123456789';
+    const baseEnv = {
+      DB: createD1Shim(join(ROOT, 'migrations')), MEDIA: createKvShim(),
+      BOT_HMAC_SECRET: 'local-test-bot-secret-0123456789abcdef', APPROVER_HMAC_SECRET: 'local-test-approver-secret-0123456789ab',
+      PUBLISHER_MODE: 'mock', PUBLISHER_PROVIDER: 'youtube',
+      ACCESS_TEAM_DOMAIN: 'team.example.com', ACCESS_AUD: aud,
+      MCP_BEARER_TOKEN: tokenMcp,
+    };
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const jwt = signer.sign({ aud, exp, email: 'ana@example.com' });
+    const mcp = async (dbEnv, bearer, method) => {
+      const res = await workerMod.default.fetch(new Request('https://local.test/mcp', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 1, method,
+          params: method === 'initialize' ? { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'aceptacion', version: '0' } } : {},
+        }),
+      }), dbEnv, { waitUntil() {} });
+      const text = await res.text();
+      return { status: res.status, text };
+    };
+    const anon = await mcp(baseEnv, null, 'initialize');
+    eq(anon.status, 401, 'MCP sin bearer');
+    assert(anon.text.includes('UNAUTHENTICATED'), 'código MCP');
+    const wrong = await mcp(baseEnv, 'bearer-distinto-de-prueba-0001', 'tools/list');
+    eq(wrong.status, 401, 'bearer incorrecto');
+    const listed = await mcp(baseEnv, tokenMcp, 'tools/list');
+    eq(listed.status, 200, 'tools/list');
+    for (const name of ['reclamar_encargo', 'leer_origen', 'subir_resultado', 'revisar_estado']) {
+      assert(listed.text.includes(`"name":"${name}"`), name);
+    }
+    for (const name of ['aprobar', 'publicar', 'approve', 'publish']) {
+      assert(!listed.text.includes(`"name":"${name}`), `no debe existir ${name}`);
+    }
+
+    const calls = [];
+    setEncargoWebhookTransport(async () => { calls.push('hit'); throw new Error('caído'); });
+    try {
+      const callPerson = async (dbEnv, path, body) => {
+        const res = await workerMod.default.fetch(new Request(`https://local.test${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'cf-access-jwt-assertion': jwt },
+          body: JSON.stringify(body),
+        }), dbEnv);
+        return { status: res.status, ...(await res.json()) };
+      };
+      const guide = await callPerson(baseEnv, '/v1/me', { display_name: 'Ana', time_zone: 'Europe/Madrid' });
+      assert(guide.ok, JSON.stringify(guide.error));
+      const absent = await callPerson(baseEnv, '/v1/me/encargos', {
+        account_id: guide.data.accounts[0].account_id, kind: 'from_scratch', note: 'sin aviso', platforms: ['youtube'],
+      });
+      eq(absent.status, 200, 'creación sin webhook');
+      eq(absent.data.status, 'queued', 'sigue en cola');
+      eq(calls.length, 0, 'no se llamó al webhook');
+
+      const failingEnv = {
+        ...baseEnv,
+        DB: createD1Shim(join(ROOT, 'migrations')),
+        INFLU_WEBHOOK_URL: 'https://influ-webhook.test/rutina',
+        INFLU_WEBHOOK_SECRET: 'clave-de-rutina-aceptacion-012345',
+      };
+      const guide2 = await callPerson(failingEnv, '/v1/me', { display_name: 'Ana', time_zone: 'Europe/Madrid' });
+      const failed = await callPerson(failingEnv, '/v1/me/encargos', {
+        account_id: guide2.data.accounts[0].account_id, kind: 'from_scratch', note: 'aviso caído', platforms: ['youtube'],
+      });
+      eq(failed.status, 200, 'creación con webhook caído');
+      eq(failed.data.status, 'queued', 'la cola no se pierde');
+      eq(calls.length, 1, 'se intentó el aviso');
+    } finally {
+      setEncargoWebhookTransport(null);
+    }
+    log.push('MCP sin bearer=401; tools/list no tiene aprobar ni publicar; sin URL no hay POST; un POST que falla deja el encargo en cola');
   });
 }
 

@@ -34,3 +34,7 @@ Respuestas: `{ ok: true, data }` o `{ ok: false, error: { code, message, details
 Ningún campo de petición puede elegir el modo de publicación (`mode`, `live`, `status`, `approved*` se rechazan en los lotes y se ignoran en `dispatch`).
 
 Cliente de referencia: `bot/client-lib.mjs`. CLI: `bot/influ.mjs`.
+
+## Webhook saliente hacia la rutina (fase H2)
+
+No es una de las rutas de arriba. Al crear un encargo que queda en cola, el Worker puede hacer `POST` a `INFLU_WEBHOOK_URL` con `Authorization: Bearer` y el secreto `INFLU_WEBHOOK_SECRET`. Si falta alguno de los dos, no llama. Si la llamada falla, el encargo sigue en cola. Configuración: [mcp-grok.md](mcp-grok.md).

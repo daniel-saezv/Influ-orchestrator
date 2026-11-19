@@ -141,6 +141,14 @@ export class D1Repository {
     await this.db.prepare('INSERT INTO audit_log (at, actor, action, batch_id, detail_json) VALUES (?, ?, ?, ?, ?)').bind(now, actor, action, batchId ?? null, j(detail)).run();
   }
 
+  async lastBackupReviewDay() {
+    const row = await this.db.prepare(
+      `SELECT detail_json FROM audit_log WHERE action = 'ENCARGO_BACKUP_CHECKED' ORDER BY id DESC LIMIT 1`,
+    ).first();
+    if (!row?.detail_json) return null;
+    try { return JSON.parse(row.detail_json).day ?? null; } catch { return null; }
+  }
+
   async listAudit(batchId, limit = 100) {
     const q = batchId
       ? this.db.prepare('SELECT at, actor, action, batch_id, detail_json FROM audit_log WHERE batch_id = ? ORDER BY id DESC LIMIT ?').bind(batchId, limit)
