@@ -36,7 +36,16 @@ describe('mobile creation flow', () => {
     await user.type(screen.getByLabelText('Tu idea'), 'Una presentación de mi nuevo proyecto')
     expect(screen.queryByRole('button', { name: 'YouTube Short' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Preparar' })).toBeDisabled()
-    await chooseFormat(user, 'Vídeo corto', ['YouTube Short', 'Reel', 'TikTok'])
+    const fit = screen.getByRole('region', { name: 'Formato y destino' })
+    expect(within(fit).getByText('Elige un formato y aquí verás dónde sale.')).toBeInTheDocument()
+    await chooseFormat(user, 'Foto', [])
+    expect(within(fit).getByText('No publica fotos')).toBeInTheDocument()
+    expect(within(fit).getByRole('button', { name: 'Instagram Feed' })).toBeInTheDocument()
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short', 'Instagram Reel', 'TikTok Vídeo'])
+    expect(within(fit).queryByText('No publica fotos')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Instagram Story' }))
+    expect(screen.getByRole('button', { name: 'Instagram Reel' })).toHaveAttribute('aria-pressed', 'false')
+    await user.click(screen.getByRole('button', { name: 'Instagram Reel' }))
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
 
     expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
@@ -59,7 +68,7 @@ describe('mobile creation flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Aprobar y publicar' }))
     expect(await screen.findByRole('heading', { name: '¡Corten! Está publicado.' })).toBeInTheDocument()
-    expect(screen.getByText('YouTube Short, Reel, TikTok')).toBeInTheDocument()
+    expect(screen.getByText('YouTube Short, TikTok Vídeo, Instagram Reel')).toBeInTheDocument()
     expect(getFakeApiState().encargos[0]).toMatchObject({ status: 'scheduled', version: 2 })
     await user.click(screen.getByRole('button', { name: 'Ver historial' }))
     expect(await screen.findAllByText(/MOCK-/)).toHaveLength(3)
@@ -198,7 +207,7 @@ describe('mobile creation flow', () => {
     render(<App api={fakeApi} />)
 
     await user.type(await screen.findByLabelText('Tu idea'), 'Frame con una imagen vertical')
-    await chooseFormat(user, 'Foto', ['Feed'])
+    await chooseFormat(user, 'Foto', ['Instagram Feed'])
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
     expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
     expect(screen.getByRole('img', { name: 'Previa del encargo' })).toHaveClass('frame-media-image')
@@ -266,8 +275,8 @@ describe('mobile creation flow', () => {
     expect(await screen.findByLabelText('Tu idea')).toHaveValue('Idea guardada')
     expect(screen.getByRole('radio', { name: /Vídeo corto/ })).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByRole('button', { name: 'YouTube Short' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'TikTok' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Reel' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'TikTok Vídeo' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Instagram Reel' })).toHaveAttribute('aria-pressed', 'false')
     view.unmount()
 
     sessionStorage.setItem('influ-studio-draft', JSON.stringify({

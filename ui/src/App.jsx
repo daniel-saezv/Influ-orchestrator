@@ -6,14 +6,18 @@ import {
   Check,
   Clapperboard,
   Flame,
+  GalleryHorizontalEnd,
   History,
+  Image,
   Inbox,
   List,
   LoaderCircle,
   Monitor,
+  MonitorPlay,
   Moon,
   Plus,
   RotateCcw,
+  Smartphone,
   Sparkles,
   Sun,
   Upload,
@@ -37,41 +41,45 @@ const PLATFORMS = ['YouTube', 'Instagram', 'TikTok']
 const days = (count) => `${count} ${count === 1 ? 'día' : 'días'}`
 const platformLabel = (value) => String(value).split(',').map((item) => PLATFORMS.find((name) => name.toLowerCase() === item.trim().toLowerCase()) ?? item.trim()).join(', ')
 const FORMATS = [
-  { id: 'image', label: 'Foto', hint: 'Una imagen' },
-  { id: 'carousel', label: 'Carrusel', hint: 'Varias fotos' },
-  { id: 'short_video', label: 'Vídeo corto', hint: 'Vertical, hasta 3 min' },
-  { id: 'video', label: 'Vídeo', hint: 'Pieza larga' },
+  { id: 'image', label: 'Foto', hint: 'Una imagen', missing: 'No publica fotos', icon: Image },
+  { id: 'carousel', label: 'Carrusel', hint: 'Varias fotos', missing: 'No publica carruseles', icon: GalleryHorizontalEnd },
+  { id: 'short_video', label: 'Vídeo corto', hint: 'Vertical, hasta 3 min', missing: 'No publica vídeo corto', icon: Smartphone },
+  { id: 'video', label: 'Vídeo', hint: 'Pieza larga', missing: 'No publica vídeo largo', icon: MonitorPlay },
 ]
 const TARGETS = {
   image: [
     { id: 'instagram:feed', platform: 'instagram', label: 'Feed' },
     { id: 'instagram:story', platform: 'instagram', label: 'Story' },
-    { id: 'tiktok:photo', platform: 'tiktok', label: 'TikTok' },
+    { id: 'tiktok:photo', platform: 'tiktok', label: 'Foto' },
   ],
   carousel: [
     { id: 'instagram:feed', platform: 'instagram', label: 'Carrusel' },
-    { id: 'tiktok:photo', platform: 'tiktok', label: 'TikTok' },
+    { id: 'tiktok:photo', platform: 'tiktok', label: 'Carrusel' },
   ],
   short_video: [
-    { id: 'youtube:short', platform: 'youtube', label: 'YouTube Short' },
+    { id: 'youtube:short', platform: 'youtube', label: 'Short' },
     { id: 'instagram:reel', platform: 'instagram', label: 'Reel' },
     { id: 'instagram:story', platform: 'instagram', label: 'Story' },
-    { id: 'tiktok:video', platform: 'tiktok', label: 'TikTok' },
+    { id: 'tiktok:video', platform: 'tiktok', label: 'Vídeo' },
   ],
   video: [
-    { id: 'youtube:video', platform: 'youtube', label: 'YouTube' },
+    { id: 'youtube:video', platform: 'youtube', label: 'Vídeo' },
     { id: 'instagram:reel', platform: 'instagram', label: 'Reel' },
-    { id: 'tiktok:video', platform: 'tiktok', label: 'TikTok' },
+    { id: 'tiktok:video', platform: 'tiktok', label: 'Vídeo' },
   ],
 }
 const formatLabel = (format) => FORMATS.find((item) => item.id === format)?.label ?? 'Formato anterior'
+const targetName = (choice) => `${platformLabel(choice.platform)} ${choice.label}`
 function targetText(item) {
   if (!item?.format) return platformLabel((item?.platforms ?? []).join(',')) || 'Formato anterior'
   return (item.targets ?? []).map((target) => {
-    if (item.format === 'carousel' && target.platform === 'instagram') return 'Carrusel de Instagram'
-    if (item.format === 'image' && target.platform === 'instagram' && target.target === 'feed') return 'Feed de Instagram'
-    return TARGETS[item.format]?.find((choice) => choice.id === `${target.platform}:${target.target}`)?.label ?? target.platform
+    const choice = TARGETS[item.format]?.find((entry) => entry.id === `${target.platform}:${target.target}`)
+    return choice ? targetName(choice) : platformLabel(target.platform)
   }).join(', ')
+}
+function targetPlatforms(item) {
+  const list = item?.format ? (item.targets ?? []).map((target) => target.platform) : (item?.platforms ?? [])
+  return [...new Set(list.map((value) => String(value).trim().toLowerCase()).filter(Boolean))]
 }
 function keepOnePerNetwork(current, next) {
   const added = next.find((id) => !current.includes(id))
@@ -326,32 +334,85 @@ function CancelEncargoAction({ encargo, busy, onConfirm }) {
   )
 }
 
-function FormatChoices({ value, onChange }) {
+function PlatformDots({ platforms }) {
+  if (!platforms.length) return null
   return (
-    <ToggleGroup type="single" className="format-grid" value={value} onValueChange={(next) => { if (next) { tap(); onChange(next) } }} aria-label="Formato">
-      {FORMATS.map((format) => (
-        <ToggleGroupItem key={format.id} value={format.id} className="chip format-card">
-          <span>{format.label}</span>
-          <small>{format.hint}</small>
-          <Check aria-hidden="true" className="chip-check" />
-        </ToggleGroupItem>
-      ))}
-    </ToggleGroup>
+    <span className="platform-dots" aria-hidden="true">
+      {platforms.map((platform) => <span key={platform} className={`platform-dot platform-${platform}`} />)}
+    </span>
   )
 }
 
-function TargetChoices({ format, value, onChange }) {
-  const choices = TARGETS[format] ?? []
+function FitSummary({ item }) {
+  const Icon = FORMATS.find((entry) => entry.id === item?.format)?.icon
   return (
-    <ToggleGroup type="multiple" className="chips" value={value} onValueChange={(next) => { tap(); onChange(keepOnePerNetwork(value, next)) }} aria-label="Destinos">
-      {choices.map((choice) => (
-        <ToggleGroupItem key={choice.id} value={choice.id} className="chip">
-          <span className={`platform-dot platform-${choice.platform}`} aria-hidden="true" />
-          {choice.label}
-          <Check aria-hidden="true" className="chip-check" />
-        </ToggleGroupItem>
-      ))}
-    </ToggleGroup>
+    <span className="fit-line">
+      {Icon && <Icon aria-hidden="true" />}
+      {formatLabel(item?.format)} · <PlatformDots platforms={targetPlatforms(item)} />{targetText(item)}
+    </span>
+  )
+}
+
+function TicketFit({ item }) {
+  const Icon = FORMATS.find((entry) => entry.id === item?.format)?.icon
+  return (
+    <>
+      <div><dt>Formato</dt><dd>{Icon && <Icon aria-hidden="true" />}{formatLabel(item?.format)}</dd></div>
+      <div className="ticket-wrap"><dt>Destinos</dt><dd><PlatformDots platforms={targetPlatforms(item)} />{targetText(item)}</dd></div>
+    </>
+  )
+}
+
+function FormatPicker({ format, targets, onFormat, onTargets }) {
+  const ref = useRef(null)
+  const current = FORMATS.find((item) => item.id === format)
+  const choices = TARGETS[format] ?? []
+  const pick = (next) => {
+    if (!next) return
+    tap()
+    onFormat(next)
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    window.requestAnimationFrame(() => ref.current?.scrollIntoView?.({ block: 'nearest', behavior: still ? 'auto' : 'smooth' }))
+  }
+  return (
+    <div className="fit" ref={ref}>
+      <ToggleGroup type="single" className="format-strip grid w-full grid-cols-4" value={format} onValueChange={pick} aria-label="Formato">
+        {FORMATS.map((item) => {
+          const Icon = item.icon
+          return (
+            <ToggleGroupItem key={item.id} value={item.id} className="format-tile">
+              <Icon aria-hidden="true" />
+              <span>{item.label}</span>
+            </ToggleGroupItem>
+          )
+        })}
+      </ToggleGroup>
+      <div className="fit-panel" data-idle={current ? undefined : ''}>
+        <p className="fit-head" key={`head-${format}`}>
+          {current ? <><strong>{current.label}</strong><span>{current.hint}</span></> : <span>Elige un formato y aquí verás dónde sale.</span>}
+        </p>
+        <ToggleGroup type="multiple" className="nets w-full flex-col items-stretch" value={targets} onValueChange={(next) => { tap(); onTargets(keepOnePerNetwork(targets, next)) }} aria-label="Destinos" disabled={!current} key={`nets-${format}`}>
+          {PLATFORMS.map((name) => {
+            const platform = name.toLowerCase()
+            const own = choices.filter((choice) => choice.platform === platform)
+            return (
+              <div className="net" key={platform} data-off={current && !own.length ? '' : undefined}>
+                <span className="net-name"><span className={`platform-dot platform-${platform}`} aria-hidden="true" />{name}</span>
+                <span className="net-choices">
+                  {own.map((choice) => (
+                    <ToggleGroupItem key={choice.id} value={choice.id} className="chip net-chip" aria-label={targetName(choice)}>
+                      {choice.label}
+                      <Check aria-hidden="true" className="chip-check" />
+                    </ToggleGroupItem>
+                  ))}
+                  {current && !own.length && <span className="net-off">{current.missing}</span>}
+                </span>
+              </div>
+            )
+          })}
+        </ToggleGroup>
+      </div>
+    </div>
   )
 }
 
@@ -1323,14 +1384,9 @@ function App({ api = realApi }) {
           )}
         </div>
       </Section>
-      <Section label="Formato" id="label-format">
-        <FormatChoices value={format} onChange={(next) => { setFormat(next); setTargets([]) }} />
+      <Section label="Formato y destino" id="label-format">
+        <FormatPicker format={format} targets={targets} onFormat={(next) => { setFormat(next); setTargets([]) }} onTargets={setTargets} />
       </Section>
-      {format && (
-        <Section label="Dónde" id="label-platforms">
-          <TargetChoices format={format} value={targets} onChange={setTargets} />
-        </Section>
-      )}
       <ErrorLine>{error}</ErrorLine>
       <p className="fine">Simuladores MOCK: nada sale a redes reales.</p>
     </>
@@ -1400,7 +1456,7 @@ function App({ api = realApi }) {
         )}
         {preparingLive && <p className="beat" aria-hidden="true" key={beat}>{beat}</p>}
         {preparingLive && <p className="sr-only" aria-live="polite">{statusLabel(status)}</p>}
-        {encargo && <p className="fine">{formatLabel(encargo.format)} · {targetText(encargo)}</p>}
+        {encargo && <p className="fine"><FitSummary item={encargo} /></p>}
         <p className="fine">{hint}</p>
         <ErrorLine>{error}</ErrorLine>
       </>
@@ -1486,8 +1542,7 @@ function App({ api = realApi }) {
         <p className="lead">Ya no se preparará ni se publicará en la simulación.</p>
         {encargo && (
           <dl className="ticket">
-            <div><dt>Formato</dt><dd>{formatLabel(encargo.format)}</dd></div>
-            <div><dt>Destinos</dt><dd>{targetText(encargo)}</dd></div>
+            <TicketFit item={encargo} />
             <div><dt>Estado</dt><dd>cancelado</dd></div>
           </dl>
         )}
@@ -1513,8 +1568,7 @@ function App({ api = realApi }) {
         <div className="stamp" aria-hidden="true"><Check /></div>
         <Heading eyebrow="Simulación terminada">¡Corten! <em>{later ? 'Queda programado.' : 'Está publicado.'}</em></Heading>
         <dl className="ticket">
-          <div><dt>Formato</dt><dd>{formatLabel(result?.format ?? encargo?.format)}</dd></div>
-          <div><dt>Destinos</dt><dd>{targetText(result?.targets ? result : encargo)}</dd></div>
+          <TicketFit item={result?.targets ? result : encargo} />
           <div><dt>Hora</dt><dd>{scheduledTime}</dd></div>
           <div><dt>Racha</dt><dd><Flame aria-hidden="true" />{days(streaks[account?.id] ?? 1)}</dd></div>
         </dl>
@@ -1556,7 +1610,7 @@ function App({ api = realApi }) {
                 <button type="button" className="encargo-open" aria-busy={openingId === item.id || undefined} disabled={openingId === item.id} onClick={() => openListed(item)}>
                   <span>
                     <strong className="encargo-title">{encargoTitle(item)}</strong>
-                    <span>{formatLabel(item.format)} · {targetText(item)}</span>
+                    <FitSummary item={item} />
                     <span>
                       {(me?.accounts.length ?? 0) > 1 && `${item.account_name ?? account?.name ?? 'Cuenta'} · `}
                       Actualizado {formatWhen(item.updated_at ?? item.created_at, timeZone)}
