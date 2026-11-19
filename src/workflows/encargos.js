@@ -419,7 +419,9 @@ export async function readClaimedOrigin(repo, { encargoId, now, r2, signer = nul
   };
 }
 
-export async function claimEncargo(repo, { encargoId, now, actor = 'grok-bot' }) {
+export async function claimEncargo(repo, {
+  encargoId, now, actor = 'grok-bot', withOrigin = false, r2 = null, signer = null, env = null,
+}) {
   if (!UUID_RE.test(encargoId ?? '')) throw NOT_FOUND();
   const ok = await repo.claimEncargo(encargoId, now);
   if (!ok) {
@@ -429,7 +431,11 @@ export async function claimEncargo(repo, { encargoId, now, actor = 'grok-bot' })
   }
   const encargo = await botEncargo(repo, encargoId);
   await repo.audit(actor, 'ENCARGO_CLAIMED', null, { encargo_id: encargoId, account_id: encargo.account_id }, now);
-  return { encargo_id: encargoId, status: 'claimed', encargo };
+  const result = { encargo_id: encargoId, status: 'claimed', encargo };
+  if (withOrigin) {
+    result.origin = await readClaimedOrigin(repo, { encargoId, now, r2, signer, env, actor });
+  }
+  return result;
 }
 
 function failureMessage(code) {

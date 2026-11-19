@@ -162,11 +162,14 @@ test('MCP con bearer: herramientas de la cola y ninguna de aprobar o publicar', 
   }
   const described = tools.map((tool) => `${tool.name} ${tool.description ?? ''}`).join('\n');
   for (const word of ['aprobar', 'publicar']) assert.equal(described.includes(word), false, described);
-  for (const name of ['leer_origen', 'preparar_subida']) {
+  for (const name of ['reclamar_encargo', 'leer_origen', 'preparar_subida']) {
     const tool = tools.find((item) => item.name === name);
     assert.match(tool.description, /secreto de corta vida/);
     assert.match(tool.description, /logs/);
   }
+  const reclamar = tools.find((item) => item.name === 'reclamar_encargo');
+  assert.match(reclamar.description, /origin/);
+  assert.match(reclamar.description, /leer_origen/);
 
   for (const name of ['aprobar', 'publicar', 'approve_batch', 'decidir_encargo']) {
     const call = await rpc(dbEnv, MCP_TOKEN, 'tools/call', { name, arguments: { encargo_id: encargoId } });
@@ -184,6 +187,10 @@ test('MCP con bearer: herramientas de la cola y ninguna de aprobar o publicar', 
   assert.equal(claimBody.status, 'claimed');
   assert.equal(claimBody.encargo.format, 'short_video');
   assert.deepEqual(claimBody.encargo.targets, [{ platform: 'youtube', target: 'short' }]);
+  assert.equal(claimBody.origin.note, 'un plano del puerto');
+  assert.equal(claimBody.origin.format, 'short_video');
+  assert.deepEqual(claimBody.origin.targets, [{ platform: 'youtube', target: 'short' }]);
+  assert.equal(claimBody.origin.assets.length, 0);
 
   const hash = 'ab'.repeat(32);
   const wrongMime = await rpc(dbEnv, MCP_TOKEN, 'tools/call', {
