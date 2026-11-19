@@ -133,7 +133,7 @@ HMAC `bot` (nonce anti-replay). La clave del aprobador recibe 403. No lista usua
 { "synthetic": true, "content_hash": "hex", "file_sha256": "hex del archivo", "batch_id": "opcional", "deliverable": { "r2_key": "out/…" } }
 ```
 
-`preparar_subida` admite `image/*` o `video/*`. Si el mime no es el del formato del encargo, responde 400 `DELIVERABLE_FORMAT_MISMATCH`. El audio ya no es una pieza; una reserva antigua de audio sigue pudiendo caducar. `reclamar_encargo` y `leer_origen` incluyen `format`, `targets` y `legacy`.
+`preparar_subida` admite `image/*` o `video/*`. Si el mime no es el del formato del encargo, responde 400 `DELIVERABLE_FORMAT_MISMATCH`. El audio ya no es una pieza; una reserva antigua de audio sigue pudiendo caducar. `reclamar_encargo` (MCP) incluye `origin` con el mismo cuerpo que `leer_origen`; `leer_origen` y `origin` incluyen `format`, `targets` y `legacy`.
 
 `deliverable.r2_key` tiene que ser una reserva emitida por `preparar_subida` para ese encargo. El Worker hace `head`: el objeto existe, el tamaño es el reservado y `checksums.md5` es el `Content-MD5` firmado. El head de la pieza cuenta una clase B. Entonces enlaza la pieza con el SHA-256, el MIME y el tamaño de esa reserva. Una clave libre, o un objeto que no cuadra, no pasa el encargo a `ready`. `file_sha256` es obligatorio si hay partes de origen. Desde cero, `synthetic` tiene que ser true. La respuesta 200 deja el encargo en `ready` y escribe `audit_log` con `account_id`.
 
