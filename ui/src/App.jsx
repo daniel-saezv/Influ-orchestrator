@@ -456,6 +456,15 @@ function previewFromEncargo(data) {
   }
 }
 
+function encargoNeedsRefresh(current, next) {
+  if (!current || !next) return Boolean(next)
+  return current.updated_at !== next.updated_at
+    || current.status !== next.status
+    || current.version !== next.version
+    || current.result_sha256 !== next.result_sha256
+    || current.publish_at !== next.publish_at
+}
+
 function previewMediaKind(contentType) {
   const type = String(contentType ?? '').toLowerCase()
   if (type.startsWith('image/')) return 'image'
@@ -1094,7 +1103,7 @@ function App({ api = realApi }) {
       inflight = true
       try {
         const response = await api.getEncargo(encargoId)
-        if (!response.ok || stopped) return
+        if (!response.ok || stopped || response.notModified) return
         setEncargo(response.data)
         if (response.data.status === 'cancelled') {
           go('cancelled', 'back')
@@ -1205,10 +1214,19 @@ function App({ api = realApi }) {
     if (openingId) return
     tap()
     setOpeningId(item.id)
-    const data = await run('open', () => api.getEncargo(item.id))
+    await applyEncargo(item, 'forward')
     setOpeningId('')
-    if (!data) return
-    await applyEncargo(data)
+    api.getEncargo(item.id).then((response) => {
+      if (!response.ok || response.notModified || encargoIdRef.current !== item.id) return
+      setEncargo((current) => {
+        if (!encargoNeedsRefresh(current, response.data)) return current
+        return { ...response.data, id: response.data.id ?? item.id }
+      })
+      if ((response.data.status === 'ready' || response.data.status === 'approved') && response.data.result_sha256) {
+        const nextPreview = previewFromEncargo(response.data)
+        if (nextPreview) setPreview((current) => (current?.url === nextPreview.url ? current : nextPreview))
+      }
+    })
   }
 
   const cancelListed = async (item) => {

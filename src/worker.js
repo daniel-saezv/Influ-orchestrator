@@ -19,7 +19,7 @@ import { decideBatch } from './workflows/wf02-approve-batch.js';
 import { dispatch, publishBatchNow } from './workflows/wf03-schedule-dispatch.js';
 import { buildReview, buildResults } from './workflows/reports.js';
 import { normalizeEmail } from './core/domain/encargos.js';
-import { claimEncargo, dispatchPerson, listQueued, submitEncargoResult } from './workflows/encargos.js';
+import { claimEncargo, dispatchPerson, getEncargoHttpResponse, listQueued, submitEncargoResult } from './workflows/encargos.js';
 import { reviewUnclaimedQueue } from './workflows/encargo-backup.js';
 import { getMediaResponse, putUploadPart } from './workflows/uploads.js';
 import { deleteOrphanUploads, releaseExpiredReservations, retryPendingDeletes } from './workflows/r2-gc.js';
@@ -169,6 +169,10 @@ export default {
         const mediaMatch = /^\/v1\/me\/media\/([^/]+)$/.exec(url.pathname);
         if (mediaMatch && request.method === 'GET') {
           return await getMediaResponse(personCtx, { email, sha256: mediaMatch[1], now, request });
+        }
+        const encargoMatch = /^\/v1\/me\/encargos\/([^/]+)$/.exec(url.pathname);
+        if (encargoMatch && request.method === 'GET') {
+          return await getEncargoHttpResponse(personCtx.repo, { email, encargoId: encargoMatch[1], request });
         }
         const personBytes = new Uint8Array(await request.arrayBuffer());
         if (personBytes.length > PERSON_BODY_MAX) throw err('INVALID_INPUT', 'Cuerpo demasiado grande', 400);

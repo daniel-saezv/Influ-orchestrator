@@ -45,9 +45,9 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   const exp = Math.floor(Date.now() / 1000) + 3600;
   const person = (email) => signer.sign({ aud: AUD, exp, email });
   const service = signer.sign({ aud: AUD, exp, common_name: 'bot', type: 'app' });
-  const call = (method, path, token, body) => workerMod.fetch(new Request(`https://local.test${path}`, {
+  const call = (method, path, token, body, headers = {}) => workerMod.fetch(new Request(`https://local.test${path}`, {
     method,
-    headers: { 'cf-access-jwt-assertion': token, ...(body ? { 'content-type': 'application/json' } : {}) },
+    headers: { 'cf-access-jwt-assertion': token, ...headers, ...(body ? { 'content-type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   }), env);
   const json = async (res) => ({ status: res.status, ...(await res.json()) });
@@ -186,9 +186,21 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   assert.equal(ownMedia.status, 200);
   assert.equal(ownMedia.headers.get('x-content-sha256'), SHA);
   assert.deepEqual(new Uint8Array(await ownMedia.arrayBuffer()), mediaBytes);
-  const ownEncargo = await json(await call('GET', `/v1/me/encargos/${encargoId}`, person('ana@example.com')));
+  const ownEncargoRes = await call('GET', `/v1/me/encargos/${encargoId}`, person('ana@example.com'));
+  const ownEncargo = await json(ownEncargoRes);
   assert.equal(ownEncargo.data.preview.sha256, SHA);
   assert.equal(ownEncargo.data.preview.media_url, `/v1/me/media/${SHA}`);
+  const encargoEtag = ownEncargoRes.headers.get('etag');
+  assert.ok(encargoEtag);
+  const cachedEncargo = await call('GET', `/v1/me/encargos/${encargoId}`, person('ana@example.com'), undefined, { 'If-None-Match': encargoEtag });
+  assert.equal(cachedEncargo.status, 304);
+  assert.equal(await cachedEncargo.text(), '');
+
+  const listedReady = await json(await call('GET', '/v1/me/encargos', person('ana@example.com')));
+  const listedRow = listedReady.data.encargos.find((item) => item.encargo_id === encargoId);
+  assert.equal(listedRow.preview.sha256, SHA);
+  assert.equal(listedRow.preview.mime, 'video/mp4');
+  assert.equal(listedRow.preview.media_url, `/v1/me/media/${SHA}`);
   const ownConn = await json(await call('GET', `/v1/me/accounts/${accountId}/connections`, person('ana@example.com')));
   assert.equal(ownConn.status, 200);
   assert.deepEqual(ownConn.data.connections, []);

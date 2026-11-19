@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   api,
   createUpload,
+  getEncargo,
   getMedia,
   getMe,
   listEncargos,
@@ -126,6 +127,26 @@ describe('Worker API client', () => {
       status: 409,
       error: { code: 'CONFLICT', message: 'Solo se programa un encargo aprobado' },
     }))
+  })
+
+  it('reuses encargo snapshots when the Worker answers 304', async () => {
+    const payload = { encargo_id: 'enc-etag', status: 'claimed', version: 1, updated_at: '2026-11-19T12:00:00.000Z' }
+    const etag = '"2026-11-19T12:00:00.000Z:1:claimed::"'
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, data: payload }), {
+        status: 200,
+        headers: { 'content-type': 'application/json', etag },
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 304, headers: { etag } }))
+    vi.stubGlobal('fetch', fetch)
+
+    const first = await getEncargo('enc-etag')
+    const second = await getEncargo('enc-etag')
+
+    expect(first.ok).toBe(true)
+    expect(first.data.id).toBe('enc-etag')
+    expect(second).toMatchObject({ ok: true, notModified: true, status: 304, data: first.data })
+    expect(fetch.mock.calls[1][1].headers['If-None-Match']).toBe(etag)
   })
 
   it('returns private media as a Blob URL and exposes every person route helper', async () => {
