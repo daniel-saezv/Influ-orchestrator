@@ -29,3 +29,6 @@ jobs:
 
       - name: npm ci
         run: npm ci
+
+      - name: Skills de diseño
+        run: bash scripts/install-design-skills.sh

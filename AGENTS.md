@@ -76,6 +76,8 @@ Dependabot (`.github/dependabot.yml`): `github-actions` semanal y agrupado, y `n
 
 Una sola copia, en `.agents/skills/shadcn` (lock: `skills-lock.json`, origen `shadcn-ui/ui` @ `968d8cb9dc42ae5d52e8fd356cf84596ec832a26`).
 
+Para trabajo de UI, usa también `design-taste-frontend` y `high-end-visual-design` (no se versionan; se instalan al arrancar el entorno cloud o Copilot, y en local con `bash scripts/install-design-skills.sh`).
+
 Esa ruta la leen los dos:
 
 - Cursor, editor y cloud agents: [Agent Skills](https://cursor.com/docs/skills) incluye `.agents/skills/` de proyecto. En cloud agents hay que commitearla; no se copia sola desde el home.
@@ -130,7 +132,7 @@ No hay `.github/copilot-instructions.md`. El cloud agent ya carga este `AGENTS.m
 
 ## Cursor Cloud specific instructions
 
-La preparación es `npm ci`. No hay Docker, base de datos local ni navegador de pruebas. No hace falta `.cursor/environment.json`: en el cloud agent de esta cuenta Node ya es v22.23.4.
+La preparación es `npm ci` y `scripts/install-design-skills.sh` (ver `.cursor/environment.json`). No hay Docker, base de datos local ni navegador de pruebas. En el cloud agent de esta cuenta Node ya es v22.23.4.
 
 Para validar un cambio: `npm ci`, `npm run test:unit`, `npm run test:acceptance -- --target local` y `npm run deploy:guard`. Esos tres no necesitan secretos. `npm run deploy:dry-run` empaqueta en local sin token. El job `ci` tampoco crea el bucket de producción. `deploy/ensure-r2-bucket.mjs production` solo corre en el deploy de `main`, y `preview` solo crea `influ-poc-media-preview`. Esos pasos fallan hasta que R2 esté activado y el token tenga Workers R2 Storage → Edit.
 

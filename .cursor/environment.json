@@ -1,0 +1,3 @@
+{
+  "install": "npm ci && bash scripts/install-design-skills.sh"
+}
