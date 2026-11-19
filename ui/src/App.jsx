@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, CalendarDays, Check, Clock3, History, Plus, Sparkles, Upload, UserRound } from 'lucide-react'
 import realApi, { sha256Hex } from './api/api.js'
+import { Badge } from './components/ui/badge.jsx'
 import { Button } from './components/ui/button.jsx'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card.jsx'
 import { Field, FieldDescription, FieldLabel } from './components/ui/field.jsx'
 import { Progress } from './components/ui/progress.jsx'
 import { Skeleton } from './components/ui/skeleton.jsx'
@@ -26,14 +28,16 @@ const SAFE_PREVIEW_TYPES = new Set([
 function Shell({ eyebrow, title, children, footer, onBack }) {
   return (
     <main className="app-shell">
-      <section className="screen">
+      <div className="ambient ambient-one" aria-hidden="true" />
+      <div className="ambient ambient-two" aria-hidden="true" />
+      <section className="screen view-enter">
         <header className="screen-header">
           {onBack ? (
             <Button variant="ghost" size="icon" aria-label="Volver" onClick={onBack}>
               <ArrowLeft aria-hidden="true" />
             </Button>
           ) : <span className="header-spacer" aria-hidden="true" />}
-          <span className="brand">Influe</span>
+          <span className="brand"><span className="brand-mark" aria-hidden="true">i</span>Influe</span>
           <span className="header-spacer" aria-hidden="true" />
         </header>
         <div className="screen-copy">
@@ -302,9 +306,9 @@ function App({ api = realApi }) {
       <Button className="primary-action" size="lg" onClick={() => setScreen('name')}>Empezar</Button>
     }>
       <ol className="guide-list">
-        <li><span>1</span><p>Eliges qué quieres hacer.</p></li>
-        <li><span>2</span><p>Miras la propuesta.</p></li>
-        <li><span>3</span><p>Si te gusta, se deja programado. Todavía es una simulación.</p></li>
+        <li><Card><CardContent><span>1</span><p>Eliges qué quieres hacer.</p></CardContent></Card></li>
+        <li><Card><CardContent><span>2</span><p>Miras la propuesta.</p></CardContent></Card></li>
+        <li><Card><CardContent><span>3</span><p>Si te gusta, se deja programado. Todavía es una simulación.</p></CardContent></Card></li>
       </ol>
     </Shell>
   )
@@ -386,7 +390,7 @@ function App({ api = realApi }) {
     <Shell eyebrow={selectedAccount?.name} title="¿Qué publicamos hoy?" onBack={() => setScreen('accounts')} footer={
       <p className="footer-note">Simulación: todavía no se publica de verdad.</p>
     }>
-      {streak && <p className="streak"><Sparkles aria-hidden="true" />Racha: {streak.days} días seguidos</p>}
+      {streak && <Badge variant="secondary" className="streak"><Sparkles aria-hidden="true" />Racha: {streak.days} días seguidos</Badge>}
       <div className="choice-grid">
         <button className="choice-card" onClick={() => { setKind('from_scratch'); setScreen('brief') }}>
           <Sparkles aria-hidden="true" /><strong>Crear desde cero</strong><span>Dame una idea y la preparo.</span>
@@ -479,9 +483,9 @@ function App({ api = realApi }) {
         {preview?.url && preview.content_type?.startsWith('video/')
           ? <video className="selected-preview" src={preview.url} playsInline controls />
           : <div className="mock-video"><Sparkles aria-hidden="true" /><span>Previa 9:16</span></div>}
-        <span className="preview-version">Versión {encargo?.version}</span>
+        <Badge variant="secondary" className="preview-version">Versión {encargo?.version}</Badge>
       </div>
-      {(preview?.synthetic || preview?.contains_synthetic_media || encargo?.synthetic) && <p className="ai-note">Hecho con ayuda de IA</p>}
+      {(preview?.synthetic || preview?.contains_synthetic_media || encargo?.synthetic) && <Badge variant="secondary" className="ai-note">Hecho con ayuda de IA</Badge>}
       {error && <p className="error" role="alert">{error}</p>}
     </Shell>
   )
@@ -527,11 +531,17 @@ function App({ api = realApi }) {
         <Button className="primary-action" size="lg" onClick={startOver}>Crear otro</Button>
       }>
         <div className="success-mark"><Check aria-hidden="true" /></div>
-        <div className="receipt">
-          <p><span>Plataformas</span><strong>{result?.platforms.join(', ')}</strong></p>
-          <p><span>Hora</span><strong>{scheduledTime}</strong></p>
-          <p><span>Racha</span><strong>{streak?.days ?? 1} días</strong></p>
-        </div>
+        <Card className="receipt-card">
+          <CardHeader>
+            <CardTitle>Tu encargo</CardTitle>
+            <CardDescription>Todo quedó guardado en modo simulado.</CardDescription>
+          </CardHeader>
+          <CardContent className="receipt">
+            <p><span>Plataformas</span><strong>{result?.platforms.join(', ')}</strong></p>
+            <p><span>Hora</span><strong>{scheduledTime}</strong></p>
+            <p><span>Racha</span><strong>{streak?.days ?? 1} días</strong></p>
+          </CardContent>
+        </Card>
         {!installed && <p className="install-line">Añadir a pantalla de inicio para abrir Influe como una app.</p>}
       </Shell>
     )
