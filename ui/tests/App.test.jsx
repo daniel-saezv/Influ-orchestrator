@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../src/App.jsx'
 import fakeApi, { configureFakeApi, getFakeApiState, resetFakeApi } from '../src/api/fakeApi.js'
 
+async function chooseFormat(user, label, targets) {
+  await user.click(screen.getByRole('radio', { name: new RegExp(label) }))
+  for (const target of targets) await user.click(screen.getByRole('button', { name: target }))
+}
+
 describe('mobile creation flow', () => {
   beforeEach(() => {
     resetFakeApi()
@@ -29,9 +34,9 @@ describe('mobile creation flow', () => {
     expect(screen.getByRole('radio', { name: /Alex/ })).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByRole('button', { name: 'Preparar' })).toBeDisabled()
     await user.type(screen.getByLabelText('Tu idea'), 'Una presentación de mi nuevo proyecto')
-    expect(screen.getByRole('button', { name: 'YouTube' })).toHaveAttribute('aria-pressed', 'true')
-    await user.click(screen.getByRole('button', { name: 'Instagram' }))
-    await user.click(screen.getByRole('button', { name: 'TikTok' }))
+    expect(screen.queryByRole('button', { name: 'YouTube Short' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Preparar' })).toBeDisabled()
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short', 'Reel', 'TikTok'])
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
 
     expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
@@ -54,7 +59,7 @@ describe('mobile creation flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Aprobar y publicar' }))
     expect(await screen.findByRole('heading', { name: '¡Corten! Está publicado.' })).toBeInTheDocument()
-    expect(screen.getByText('YouTube, Instagram, TikTok')).toBeInTheDocument()
+    expect(screen.getByText('YouTube Short, Reel, TikTok')).toBeInTheDocument()
     expect(getFakeApiState().encargos[0]).toMatchObject({ status: 'scheduled', version: 2 })
     await user.click(screen.getByRole('button', { name: 'Ver historial' }))
     expect(await screen.findAllByText(/MOCK-/)).toHaveLength(3)
@@ -73,6 +78,7 @@ describe('mobile creation flow', () => {
     await user.type(screen.getByLabelText('Nombre'), 'Alex')
     await user.click(screen.getByRole('button', { name: 'Empezar' }))
     await user.type(screen.getByLabelText('Tu idea'), 'Cancelar antes de publicar')
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
     expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
 
@@ -94,6 +100,7 @@ describe('mobile creation flow', () => {
     const file = new File(['crop'], 'original.mp4', { type: 'video/mp4' })
     await user.upload(screen.getByLabelText(/Elegir vídeo, audio o fotos/), file)
     expect(screen.getByRole('button', { name: 'Quitar original.mp4' })).toBeInTheDocument()
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
     await user.type(screen.getByLabelText('Indicaciones'), 'Solo recorta el final')
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
     expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
@@ -147,6 +154,7 @@ describe('mobile creation flow', () => {
     await user.click(screen.getByRole('button', { name: 'Preparar el primero' }))
 
     await user.type(screen.getByLabelText('Tu idea'), 'Una toma para mañana')
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
     expect(await screen.findByRole('heading', { name: 'Revelando tu toma.' })).toBeInTheDocument()
     const meter = screen.getByRole('progressbar', { name: 'Preparando tu encargo' })
@@ -156,6 +164,7 @@ describe('mobile creation flow', () => {
     expect(screen.getByText('En cola, en silencio…')).toBeInTheDocument()
     expect(screen.getByRole('listitem', { current: 'step' })).toHaveTextContent('En cola')
     expect(screen.queryByText('30%')).not.toBeInTheDocument()
+    expect(screen.getByText('Vídeo corto · YouTube Short')).toBeInTheDocument()
     expect(screen.getByText('Puedes cerrar la app; aquí verás el estado de tu encargo cuando vuelvas.')).toBeInTheDocument()
     expect(screen.queryByText(/segundo plano/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Inicio' })).toBeInTheDocument()
@@ -165,6 +174,7 @@ describe('mobile creation flow', () => {
     await user.click(screen.getByRole('button', { name: 'Mis encargos' }))
     expect(await screen.findByRole('heading', { name: 'Mis encargos' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Una toma para mañana/ })).toHaveTextContent('En cola')
+    expect(screen.getByRole('button', { name: /Una toma para mañana/ })).toHaveTextContent('Vídeo corto · YouTube Short')
     expect(screen.getByText(/Actualizado/)).toBeInTheDocument()
 
     view.unmount()
@@ -188,10 +198,23 @@ describe('mobile creation flow', () => {
     render(<App api={fakeApi} />)
 
     await user.type(await screen.findByLabelText('Tu idea'), 'Frame con una imagen vertical')
+    await chooseFormat(user, 'Foto', ['Feed'])
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
     expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
     expect(screen.getByRole('img', { name: 'Previa del encargo' })).toHaveClass('frame-media-image')
     expect(screen.queryByRole('video')).not.toBeInTheDocument()
+  })
+
+  it('keeps an old audio deliverable readable without a player', async () => {
+    resetFakeApi({ onboarded: true })
+    configureFakeApi({ transitionReads: 0.5, previewMime: 'audio/mpeg' })
+    const user = userEvent.setup()
+    render(<App api={fakeApi} />)
+    await user.type(await screen.findByLabelText('Tu idea'), 'Una pista antigua')
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    expect(await screen.findByRole('img', { name: 'Pieza de audio anterior' })).toBeInTheDocument()
+    expect(document.querySelector('audio')).toBeNull()
   })
 
   it('truncates a long encargo title without hiding cancel on narrow layouts', async () => {
@@ -204,6 +227,7 @@ describe('mobile creation flow', () => {
     await user.click(await screen.findByRole('button', { name: 'Mis encargos' }))
     await user.click(screen.getByRole('button', { name: 'Preparar el primero' }))
     await user.type(screen.getByLabelText('Tu idea'), longNote)
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
     await user.click(await screen.findByRole('button', { name: 'Mis encargos' }))
 
@@ -221,6 +245,7 @@ describe('mobile creation flow', () => {
     const user = userEvent.setup()
     render(<App api={fakeApi} />)
     await user.type(await screen.findByLabelText('Tu idea'), 'Sigo en segundo plano')
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
     expect(await screen.findByRole('heading', { name: 'Revelando tu toma.' })).toBeInTheDocument()
     expect(getFakeApiState().encargos.at(-1).reads).toBe(0)
@@ -234,13 +259,25 @@ describe('mobile creation flow', () => {
     sessionStorage.setItem('influ-studio-draft', JSON.stringify({
       kind: 'from_scratch',
       note: 'Idea guardada',
+      format: 'short_video',
+      targets: ['youtube:short', 'tiktok:video'],
+    }))
+    const view = render(<App api={fakeApi} />)
+    expect(await screen.findByLabelText('Tu idea')).toHaveValue('Idea guardada')
+    expect(screen.getByRole('radio', { name: /Vídeo corto/ })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('button', { name: 'YouTube Short' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'TikTok' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Reel' })).toHaveAttribute('aria-pressed', 'false')
+    view.unmount()
+
+    sessionStorage.setItem('influ-studio-draft', JSON.stringify({
+      kind: 'from_scratch',
+      note: 'Idea antigua',
       platforms: ['YouTube', 'TikTok'],
     }))
     render(<App api={fakeApi} />)
-    expect(await screen.findByLabelText('Tu idea')).toHaveValue('Idea guardada')
-    expect(screen.getByRole('button', { name: 'YouTube' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'TikTok' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Instagram' })).toHaveAttribute('aria-pressed', 'false')
+    expect(await screen.findByLabelText('Tu idea')).toHaveValue('Idea antigua')
+    expect(screen.queryByRole('button', { name: 'YouTube Short' })).not.toBeInTheDocument()
   })
 
   it('shows a load error instead of an empty encargos list', async () => {

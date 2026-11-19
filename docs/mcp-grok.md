@@ -13,6 +13,8 @@ La aprobación no está en el conector. La persona aprueba en la UI con su JWT d
 | Webhook | Al crear un encargo que queda `queued`, un `POST` a `INFLU_WEBHOOK_URL`. |
 | Respaldo | El cron `*/15` que ya existe mira la cola una vez por día UTC. Si hay encargos `queued` sin reclamar, lo escribe en el log. No reclama, no llama a Grok y no publica. |
 
+`leer_origen` y `reclamar_encargo` incluyen `format` y `targets`. En un encargo anterior, `format` es null y `legacy` es true. `preparar_subida` admite `image/*` o `video/*` y responde `DELIVERABLE_FORMAT_MISMATCH` si el archivo no encaja con el formato.
+
 `leer_origen` sigue exigiendo un encargo `claimed`. Devuelve la nota y, por cada origen, la clave, el SHA-256, el tamaño y una URL de GET prefirmada que caduca a los 10 minutos. No devuelve bytes: el bot descarga con `curl` y compara el SHA-256. Cada GET emitido cuenta una clase B, además del head del origen. `preparar_subida` elige la clave `out/{encargo_id}/{version}/{id}`, guarda la reserva y devuelve un PUT prefirmado (10 minutos) con `Content-Type`, `Content-Length`, `Content-MD5` e `If-None-Match: *`. Esas URLs son un secreto de corta vida: no se muestran en el chat ni se escriben en logs. La firma se calcula en el Worker con `aws4fetch` y no abre la guardia de salida. `subir_resultado` solo acepta la clave de esa reserva, tras un `head` cuyo tamaño y `checksums.md5` coinciden. Si faltan `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID` o `R2_BUCKET_NAME`, esas dos herramientas responden `R2_SIGNING_UNAVAILABLE` y el resto del Worker sigue.
 
 `bot/influ.mjs` sigue para pruebas y CI sobre las rutas HMAC. En producción, Influ usa el conector.

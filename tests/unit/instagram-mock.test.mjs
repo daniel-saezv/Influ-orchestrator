@@ -45,6 +45,29 @@ test('Instagram MOCK: archivo incompatible y metadatos incompletos', async () =>
   const missing = await a.validatePost(post({ copy: {}, content_type: 'image' }));
   assert.ok(missing.errors.some((e) => e.field === 'copy.caption'));
   assert.ok((await a.validatePost(post({ content_type: 'video' }))).errors.some((e) => e.field === 'content_type'));
+  const feed = post({
+    content_type: 'image',
+    media: { ...post().media, mime: 'image/jpeg', width: 1080, height: 1350, duration_s: null, size_bytes: 100 },
+  });
+  assert.equal((await a.validatePost(feed)).ok, true);
+  assert.ok((await a.validatePost(post({ ...feed, media: { ...feed.media, mime: 'image/png' } }))).errors.some((e) => e.field === 'media.mime'));
+  assert.ok((await a.validatePost(post({ ...feed, media: { ...feed.media, width: 720, height: 1280 } }))).errors.some((e) => e.field === 'media.width'));
+  assert.ok((await a.validatePost(post({ ...feed, media: { ...feed.media, size_bytes: 8 * 1024 * 1024 + 1 } }))).errors.some((e) => e.field === 'media.size_bytes'));
+  const carousel = post({
+    content_type: 'carousel',
+    media: { ...feed.media, item_count: 20 },
+  });
+  assert.equal((await a.validatePost(carousel)).ok, true);
+  assert.ok((await a.validatePost(post({ ...carousel, media: { ...carousel.media, item_count: 21 } }))).errors.some((e) => e.field === 'media.item_count'));
+  assert.equal((await a.validatePost(post({ content_type: 'reel', media: { ...post().media, duration_s: 900 } }))).ok, true);
+  assert.ok((await a.validatePost(post({ content_type: 'reel', media: { ...post().media, duration_s: 2 } }))).errors.some((e) => e.field === 'media.duration_s'));
+  assert.equal((await a.validatePost(post({ content_type: 'story', media: { ...post().media, duration_s: 60 } }))).ok, true);
+  assert.ok((await a.validatePost(post({ content_type: 'story', media: { ...post().media, duration_s: 61 } }))).errors.some((e) => e.field === 'media.duration_s'));
+  const storyImage = post({
+    content_type: 'story',
+    media: { ...feed.media, width: 1080, height: 1920 },
+  });
+  assert.equal((await a.validatePost(storyImage)).ok, true);
 });
 
 test('Instagram MOCK: errores temporales, permanentes y autenticación', async () => {

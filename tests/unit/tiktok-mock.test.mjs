@@ -44,7 +44,16 @@ test('TikTok MOCK: archivo incompatible y metadatos incompletos', async () => {
   assert.equal(fake.error.code, 'VALIDATION_ERROR');
   const missing = await a.validatePost(post({ copy: {} }));
   assert.ok(missing.errors.some((e) => e.field === 'copy.caption'));
-  assert.ok((await a.validatePost(post({ content_type: 'image' }))).errors.some((e) => e.field === 'content_type'));
+  assert.ok((await a.validatePost(post({ content_type: 'story' }))).errors.some((e) => e.field === 'content_type'));
+  assert.ok((await a.validatePost(post({ media: { ...post().media, duration_s: 181 } }))).errors.some((e) => e.field === 'media.duration_s'));
+  assert.equal((await a.validatePost(post({ media: { ...post().media, duration_s: 180 } }))).ok, true);
+  const photo = post({
+    content_type: 'photo', target: 'photo',
+    media: { ...post().media, mime: 'image/jpeg', width: 1080, height: 1440, duration_s: null, item_count: 35 },
+  });
+  assert.equal((await a.validatePost(photo)).ok, true);
+  assert.ok((await a.validatePost(post({ ...photo, media: { ...photo.media, item_count: 36 } }))).errors.some((e) => e.field === 'media.item_count'));
+  assert.ok((await a.validatePost(post({ ...photo, media: { ...photo.media, mime: 'image/png' } }))).errors.some((e) => e.field === 'media.mime'));
 });
 
 test('TikTok MOCK: errores temporales, permanentes y autenticación', async () => {

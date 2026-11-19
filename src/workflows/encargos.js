@@ -3,9 +3,10 @@ import { err } from '../core/domain/errors.js';
 import { BATCH_ID_RE } from '../core/domain/batch.js';
 import { contentHash } from '../core/domain/hash.js';
 import {
-  assertName, assertNoControlFields, assertPlatforms, assertSha256, assertTimeZone,
+  assertName, assertNoControlFields, assertSha256, assertTimeZone,
   civilDay, localTime, nextStreakCount, visibleStreak,
 } from '../core/domain/encargos.js';
+import { assertEncargoSelection } from '../core/domain/formats.js';
 import { MAX_CLASS_B_GLOBAL, MAX_CLASS_B_USER } from '../core/domain/r2-quota.js';
 import { PRESIGN_TTL_SECONDS, signingUnavailableError } from '../adapters/storage/r2-presign.js';
 import { deleteAssetObjects } from './r2-gc.js';
@@ -39,6 +40,9 @@ function publicEncargo(row, assets = []) {
     note: row.note,
     status: row.status,
     platforms: row.platforms,
+    format: row.format ?? null,
+    targets: row.targets ?? null,
+    legacy: row.legacy === true || row.format == null,
     version: row.version,
     content_hash: row.content_hash,
     synthetic: row.synthetic,
@@ -116,7 +120,7 @@ export async function createEncargo(repo, { email, body, now }) {
   requireGuide(account);
   const kind = body.kind;
   if (kind !== 'from_scratch' && kind !== 'edit') throw err('INVALID_INPUT', 'kind debe ser from_scratch o edit', 400);
-  const platforms = assertPlatforms(body.platforms);
+  const { format, targets, platforms } = assertEncargoSelection(body);
   let note = null;
   if (body.note !== undefined && body.note !== null) {
     if (typeof body.note !== 'string' || body.note.length > 4000) throw err('INVALID_INPUT', 'La nota no es válida', 400);
@@ -124,8 +128,10 @@ export async function createEncargo(repo, { email, body, now }) {
   }
   if (kind === 'from_scratch' && !note) throw err('INVALID_INPUT', 'Cuéntame la idea', 400);
   const status = kind === 'from_scratch' ? 'queued' : 'draft';
-  const encargoId = await repo.insertEncargo({ accountId: account.account_id, kind, note, status, platforms, now });
-  return { encargo_id: encargoId, account_id: account.account_id, kind, status };
+  const encargoId = await repo.insertEncargo({ accountId: account.account_id, kind, note, status, platforms, format, targets, now });
+  return {
+    encargo_id: encargoId, account_id: account.account_id, kind, status, platforms, format, targets, legacy: false,
+  };
 }
 
 export async function listEncargos(repo, { email, now }) {
@@ -291,6 +297,9 @@ async function botEncargo(repo, encargoId) {
     note: row.note,
     status: row.status,
     platforms: row.platforms,
+    format: row.format ?? null,
+    targets: row.targets ?? null,
+    legacy: row.legacy === true || row.format == null,
     version: row.version,
     file_sha256: await repo.sourceFileSha(encargoId),
     assets: await repo.listSourceAssets(encargoId),
@@ -367,6 +376,9 @@ export async function readClaimedOrigin(repo, { encargoId, now, r2, signer = nul
     note: row.note,
     status: row.status,
     platforms: row.platforms,
+    format: row.format ?? null,
+    targets: row.targets ?? null,
+    legacy: row.legacy === true || row.format == null,
     version: row.version,
     file_sha256: await repo.sourceFileSha(encargoId),
     assets: checked,

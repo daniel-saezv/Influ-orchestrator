@@ -1,24 +1,28 @@
-// Reglas de validación de YouTube compartidas por los adaptadores MOCK y (futuro) LIVE.
-// Basadas en la documentación pública de YouTube Data API v3 (videos.insert / recurso video).
-// Lo que no se puede comprobar sin la API real (p. ej. lista de categorías asignables por región,
-// que se obtiene con videoCategories.list) queda marcado como aviso.
 import { ErrorCode } from '../../../core/ports/social-publisher.js';
 
 export const YT_PRIVACY = ['public', 'private', 'unlisted'];
-export const YT_TITLE_MAX = 100;            // snippet.title: máx. 100 caracteres, sin < ni >
-export const YT_DESCRIPTION_MAX_BYTES = 5000; // snippet.description: máx. 5000 bytes, sin < ni >
-export const YT_TAGS_MAX_CHARS = 500;       // snippet.tags[]: máx. 500 caracteres en total
-export const YT_ACCEPTED_MIME = /^video\//; // videos.insert acepta video/* y application/octet-stream
+export const YT_TITLE_MAX = 100;
+export const YT_DESCRIPTION_MAX_BYTES = 5000;
+export const YT_TAGS_MAX_CHARS = 500;
+export const YT_ACCEPTED_MIME = /^video\//;
 export const YT_SHORTS_MAX_SECONDS = 180;
+
+const TARGET_TYPES = { short: ['short_video'], video: ['video'] };
 
 export function buildDescription(copy) {
   const tags = (copy.hashtags ?? []).map((h) => (h.startsWith('#') ? h : `#${h}`)).join(' ');
   return [copy.description ?? '', tags].filter(Boolean).join('\n\n');
 }
 
-// Longitud de tags tal como la cuenta YouTube: las etiquetas con espacios cuentan entre comillas.
 export function tagsLength(tags = []) {
   return tags.reduce((n, t) => n + t.length + (t.includes(' ') ? 2 : 0), 0) + Math.max(0, tags.length - 1);
+}
+
+function resolveTarget(post) {
+  if (post.target === 'short' || post.target === 'video') return post.target;
+  if (post.content_type === 'short_video') return 'short';
+  if (post.content_type === 'video') return 'video';
+  return null;
 }
 
 export function validateYouTubePost(post, { maxBytes }) {
@@ -26,8 +30,12 @@ export function validateYouTubePost(post, { maxBytes }) {
   const warnings = [];
   const add = (field, message) => errors.push({ code: ErrorCode.VALIDATION_ERROR, field, message });
   const c = post.copy ?? {};
+  const target = resolveTarget(post);
   if (post.platform !== 'youtube') add('platform', 'El adaptador de YouTube solo acepta platform=youtube');
-  if (!['short_video', 'video'].includes(post.content_type)) add('content_type', 'YouTube solo admite short_video o video');
+  if (!target) add('content_type', 'YouTube solo admite un Short o un vídeo');
+  else if (post.content_type && !TARGET_TYPES[target].includes(post.content_type)) {
+    add('content_type', 'El tipo no coincide con el destino del encargo');
+  }
   if (typeof c.title !== 'string' || !c.title.trim()) add('copy.title', 'Título obligatorio');
   else {
     if (c.title.length > YT_TITLE_MAX) add('copy.title', `Título > ${YT_TITLE_MAX} caracteres`);
@@ -48,14 +56,15 @@ export function validateYouTubePost(post, { maxBytes }) {
   if (!YT_ACCEPTED_MIME.test(m.mime ?? '') && m.mime !== 'application/octet-stream') add('media.mime', `Tipo de archivo incompatible: ${m.mime}`);
   if (!(m.size_bytes > 0)) add('media.size_bytes', 'Archivo vacío');
   else if (m.size_bytes > maxBytes) add('media.size_bytes', `Archivo > ${maxBytes} bytes (límite de la POC)`);
-  if (post.content_type === 'short_video') {
-    if (m.duration_s != null && m.duration_s > YT_SHORTS_MAX_SECONDS) add('media.duration_s', `Un Short no puede superar ${YT_SHORTS_MAX_SECONDS} s`);
-    if (m.width && m.height && m.width > m.height) warnings.push('Short horizontal: se recomienda formato vertical 9:16');
+  if (target === 'short') {
+    if (m.duration_s == null) warnings.push(`No se ha comprobado la duración del Short (máximo ${YT_SHORTS_MAX_SECONDS} s)`);
+    else if (m.duration_s > YT_SHORTS_MAX_SECONDS) add('media.duration_s', `Un Short no puede superar ${YT_SHORTS_MAX_SECONDS} s`);
+    if (!(m.width > 0) || !(m.height > 0)) warnings.push('No se ha comprobado que el Short sea vertical o cuadrado');
+    else if (m.width > m.height) add('media.width', 'Un Short tiene que ser vertical o cuadrado');
   }
   return { ok: errors.length === 0, errors, warnings };
 }
 
-// Comprobación del contenido real del archivo (firma ISO-BMFF "ftyp" para MP4/MOV, EBML para WebM).
 export function sniffVideo(bytes) {
   if (!bytes || bytes.length < 12) return null;
   const ftyp = String.fromCharCode(bytes[4], bytes[5], bytes[6], bytes[7]);

@@ -341,7 +341,7 @@ if (target === 'local') {
     assert(ana.ok, JSON.stringify(ana.error));
     const accountId = ana.data.accounts[0].account_id;
     const encargo = await call('POST', '/v1/me/encargos', token('ana@example.com'), {
-      account_id: accountId, kind: 'from_scratch', note: 'idea', platforms: ['youtube'],
+      account_id: accountId, kind: 'from_scratch', note: 'idea', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }],
     });
     assert(encargo.ok, JSON.stringify(encargo.error));
     const bot = new OrchestratorClient({
@@ -432,7 +432,7 @@ if (target === 'local') {
     assert(ana.ok, JSON.stringify(ana.error));
     async function editWith(bytes) {
       const created = await call('POST', '/v1/me/encargos', token('ana@example.com'), {
-        json: { account_id: ana.data.accounts[0].account_id, kind: 'edit', platforms: ['youtube'] },
+        json: { account_id: ana.data.accounts[0].account_id, kind: 'edit', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }] },
       });
       assert(created.ok, JSON.stringify(created.error));
       const digest = createHash('sha256').update(bytes).digest('hex');
@@ -572,7 +572,7 @@ if (target === 'local') {
       const guide = await callPerson(baseEnv, '/v1/me', { display_name: 'Ana', time_zone: 'Europe/Madrid' });
       assert(guide.ok, JSON.stringify(guide.error));
       const absent = await callPerson(baseEnv, '/v1/me/encargos', {
-        account_id: guide.data.accounts[0].account_id, kind: 'from_scratch', note: 'sin aviso', platforms: ['youtube'],
+        account_id: guide.data.accounts[0].account_id, kind: 'from_scratch', note: 'sin aviso', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }],
       });
       eq(absent.status, 200, 'creación sin webhook');
       eq(absent.data.status, 'queued', 'sigue en cola');
@@ -586,7 +586,7 @@ if (target === 'local') {
       };
       const guide2 = await callPerson(failingEnv, '/v1/me', { display_name: 'Ana', time_zone: 'Europe/Madrid' });
       const failed = await callPerson(failingEnv, '/v1/me/encargos', {
-        account_id: guide2.data.accounts[0].account_id, kind: 'from_scratch', note: 'aviso caído', platforms: ['youtube'],
+        account_id: guide2.data.accounts[0].account_id, kind: 'from_scratch', note: 'aviso caído', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }],
       });
       eq(failed.status, 200, 'creación con webhook caído');
       eq(failed.data.status, 'queued', 'la cola no se pierde');

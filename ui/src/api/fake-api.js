@@ -15,6 +15,13 @@ export const FETCH_CREDENTIALS = 'same-origin'
 export const PROCESSING_STATES = ['queued', 'preparing', 'ready']
 export const PLATFORMS = ['youtube', 'instagram', 'tiktok']
 
+const FORMAT_TARGETS = {
+  image: { instagram: ['feed', 'story'], tiktok: ['photo'] },
+  carousel: { instagram: ['feed'], tiktok: ['photo'] },
+  short_video: { youtube: ['short'], instagram: ['reel', 'story'], tiktok: ['video'] },
+  video: { youtube: ['video'], instagram: ['reel'], tiktok: ['video'] },
+}
+
 const sleep = () => Promise.resolve()
 let activeEmail = FAKE_ACCESS_EMAIL
 let nowValue = Date.parse('2026-11-18T12:00:00.000Z')
@@ -75,6 +82,8 @@ export function resetFakeApi({ onboarded = false, seedOtherAccount = false } = {
       kind: 'from_scratch',
       note: 'Privado',
       platforms: ['youtube'],
+      format: null,
+      targets: null,
       status: 'ready',
       version: 1,
       fingerprint: 'fp-other',
@@ -250,9 +259,18 @@ async function updateAccount(accountId, input = {}) {
   return success(publicAccount(account))
 }
 
-function normalisePlatforms(platforms) {
-  return [...new Set((platforms ?? []).map((platform) => String(platform).toLowerCase()))]
-    .filter((platform) => PLATFORMS.includes(platform))
+function selectionError(input) {
+  const allowed = FORMAT_TARGETS[input.format]
+  if (!allowed) return 'Elige un formato.'
+  if (!Array.isArray(input.targets) || input.targets.length === 0) return 'Elige al menos un destino.'
+  const seen = new Set()
+  for (const item of input.targets) {
+    const options = allowed[item?.platform]
+    if (!options?.includes(item?.target)) return 'Ese destino no encaja con el formato.'
+    if (seen.has(item.platform)) return 'Un destino por red.'
+    seen.add(item.platform)
+  }
+  return ''
 }
 
 async function createEncargo(input = {}) {
@@ -261,9 +279,11 @@ async function createEncargo(input = {}) {
   if (!account) return missing()
   const kind = input.kind === 'edit' ? 'edit' : 'from_scratch'
   const note = String(input.note ?? input.idea ?? '').trim()
-  const platforms = normalisePlatforms(input.platforms)
+  const invalid = selectionError(input)
   if (!note && kind === 'from_scratch') return badRequest('Describe qué quieres preparar.')
-  if (!platforms.length) return badRequest('Selecciona al menos una plataforma.')
+  if (invalid) return badRequest(invalid)
+  const targets = input.targets.map((item) => ({ platform: item.platform, target: item.target }))
+  const platforms = PLATFORMS.filter((platform) => targets.some((item) => item.platform === platform))
   const linkedUpload = input.upload_session_id
     ? requireUpload(input.upload_session_id)
     : null
@@ -283,6 +303,8 @@ async function createEncargo(input = {}) {
     kind,
     note,
     platforms,
+    format: input.format,
+    targets,
     status: 'queued',
     version: 1,
     fingerprint: `fp-${id}-v1`,
@@ -318,6 +340,9 @@ function publicEncargo(encargo) {
     status: encargo.status,
     note: encargo.note,
     platforms: encargo.platforms,
+    format: encargo.format ?? null,
+    targets: encargo.targets ?? null,
+    legacy: encargo.format == null,
     version: encargo.version,
     fingerprint: encargo.fingerprint,
     result_sha256: encargo.preview?.sha256 ?? null,

@@ -1,5 +1,6 @@
 import { err } from '../core/domain/errors.js';
 import { assertSha256 } from '../core/domain/encargos.js';
+import { assertDeliverableMime } from '../core/domain/formats.js';
 import {
   MAX_CLASS_A_GLOBAL, MAX_CLASS_A_USER, MAX_FILE_BYTES, MAX_GLOBAL_BYTES, MAX_USER_BYTES,
 } from '../core/domain/r2-quota.js';
@@ -7,7 +8,6 @@ import { PRESIGN_TTL_SECONDS, signingUnavailableError } from '../adapters/storag
 import { releaseExpiredReservations, releaseReservationHold } from './r2-gc.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const MIME_RE = /^(image|video|audio)\/[\w.+-]+$/;
 const NOT_FOUND = () => err('NOT_FOUND', 'No encontrado', 404);
 
 function demandSigner(signer, env) {
@@ -33,9 +33,8 @@ function assertContentMd5(value) {
   return value;
 }
 
-function assertUploadMime(value) {
-  if (typeof value !== 'string' || !MIME_RE.test(value)) throw err('INVALID_INPUT', 'mime no admitido', 400);
-  return value;
+function assertUploadMime(value, format) {
+  return assertDeliverableMime(format, value);
 }
 
 function assertUploadSize(value) {
@@ -79,7 +78,7 @@ export async function prepareDeliverableUpload(repo, {
   if (encargo.status !== 'claimed') throw err('CONFLICT', 'El encargo no está reclamado', 409);
   const hash = assertSha256(sha256, 'sha256');
   const md5 = assertContentMd5(contentMd5);
-  const type = assertUploadMime(mime);
+  const type = assertUploadMime(mime, encargo.format ?? null);
   const size = assertUploadSize(sizeBytes);
   const activeSigner = demandSigner(signer, env);
   const version = encargo.delivered ? Number(encargo.version) + 1 : Number(encargo.version);

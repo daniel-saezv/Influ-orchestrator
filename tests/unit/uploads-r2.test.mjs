@@ -68,7 +68,7 @@ async function draft(h, email = 'ana@example.com') {
   const guide = await h.read(await h.call('POST', '/v1/me', email, { json: { display_name: 'Ana', time_zone: 'UTC' } }));
   assert.equal(guide.status, 200);
   const created = await h.read(await h.call('POST', '/v1/me/encargos', email, {
-    json: { account_id: guide.data.accounts[0].account_id, kind: 'edit', platforms: ['youtube'] },
+    json: { account_id: guide.data.accounts[0].account_id, kind: 'edit', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }] },
   }));
   assert.equal(created.data.status, 'draft');
   return { email, encargoId: created.data.encargo_id, accountId: guide.data.accounts[0].account_id };
@@ -387,7 +387,7 @@ test('sin binding de R2 la subida responde 503 y no reserva', async () => {
   }), env);
   const guide = await (await call('/v1/me', { display_name: 'Ana', time_zone: 'UTC' })).json();
   const created = await (await call('/v1/me/encargos', {
-    account_id: guide.data.accounts[0].account_id, kind: 'edit', platforms: ['youtube'],
+    account_id: guide.data.accounts[0].account_id, kind: 'edit', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }],
   })).json();
   const res = await call('/v1/me/uploads', { encargo_id: created.data.encargo_id, size_bytes: 4, mime: 'video/mp4' });
   const body = await res.json();
