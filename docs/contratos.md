@@ -110,8 +110,12 @@ JSON `{ "sha256": "hex del archivo entero" }`. Exige todas las partes. No llama 
 `GET /v1/me/encargos`. JWT de Access, el mismo aislamiento que el resto de `/v1/me`: solo los encargos de las cuentas de ese correo, del más reciente al más antiguo, como máximo 100. `200`:
 
 ```json
-{ "ok": true, "data": { "encargos": [{ "encargo_id": "uuid", "account_id": "uuid", "account_name": "Ana", "status": "queued", "kind": "from_scratch", "note": "idea", "format": "short_video", "targets": [{ "platform": "youtube", "target": "short" }], "platforms": ["youtube"], "legacy": false, "version": 1, "created_at": "2026-11-19T12:00:00.000Z", "updated_at": "2026-11-19T12:00:00.000Z" }] } }
+{ "ok": true, "data": { "encargos": [{ "encargo_id": "uuid", "account_id": "uuid", "account_name": "Ana", "status": "ready", "kind": "from_scratch", "note": "idea", "format": "short_video", "targets": [{ "platform": "youtube", "target": "short" }], "platforms": ["youtube"], "legacy": false, "version": 1, "preview": { "sha256": "hex", "mime": "video/mp4", "size_bytes": 1000, "version": 1, "media_url": "/v1/me/media/hex" }, "created_at": "2026-11-19T12:00:00.000Z", "updated_at": "2026-11-19T12:00:00.000Z" }] } }
 ```
+
+Cada ítem lleva `preview` solo si existe una pieza entregable de la versión actual (mismos campos que el detalle). No se lee R2 al listar.
+
+`GET /v1/me/encargos/:id` responde con cabecera `etag` derivada de `updated_at`, versión, estado, `content_hash` y huella de la previa. Un `If-None-Match` coincidente devuelve 304 sin cuerpo JSON aunque el Worker siga consultando D1.
 
 `POST /v1/me/encargos` exige `format` (`image`, `carousel`, `short_video` o `video`) y `targets` (un `{ platform, target }` por red, solo combinaciones compatibles). `platforms` lo calcula el servidor. Un encargo de antes de la migración 0008 se lee con `format: null`, `targets: null` y `legacy: true`.
 

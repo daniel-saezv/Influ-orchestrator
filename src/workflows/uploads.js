@@ -212,7 +212,7 @@ function mediaEtag(hash) {
   return `"${hash}"`;
 }
 
-function etagMatches(header, etag) {
+export function etagMatches(header, etag) {
   if (!header) return false;
   return header.split(',').some((part) => {
     const value = part.trim();
