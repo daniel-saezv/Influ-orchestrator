@@ -35,7 +35,7 @@ Configura el entorno **`production`** en el repositorio (Settings → Environmen
 
 Opcional: `INFLU_BASE_URL` si la URL workers.dev no sigue el patrón `https://influ-poc-orchestrator.<subdomain>.workers.dev`.
 
-**Secrets del Worker** (`BOT_HMAC_SECRET`, `APPROVER_HMAC_SECRET`, y cuando se use el conector, `MCP_BEARER_TOKEN`, `INFLU_WEBHOOK_URL`, `INFLU_WEBHOOK_SECRET`): ya en Cloudflare; `wrangler deploy` los **conserva** (no van en `wrangler.toml` ni en GitHub). `wrangler preview` **no** los hereda: ver más abajo. El alta del bearer y del webhook está en [mcp-grok.md](mcp-grok.md). La exclusión de Access es solo la ruta `/mcp` y se hace en el panel: el token de CI no tiene permiso de Access.
+**Secrets del Worker** (`BOT_HMAC_SECRET`, `APPROVER_HMAC_SECRET`, y cuando se use el conector, `MCP_BEARER_TOKEN`, `ACCESS_MCP_AUD`, `MCP_SERVICE_TOKEN_CLIENT_ID`, `INFLU_WEBHOOK_URL`, `INFLU_WEBHOOK_SECRET`): ya en Cloudflare; `wrangler deploy` los **conserva** (no van en `wrangler.toml` ni en GitHub). `wrangler preview` **no** los hereda: ver más abajo. El alta del bearer, del JWT de `/mcp` y del webhook está en [mcp-grok.md](mcp-grok.md). La aplicación Access de `/mcp` (Service Auth, sin Bypass) se hace en el panel: el token de CI no tiene permiso de Access.
 
 ## Pipeline
 

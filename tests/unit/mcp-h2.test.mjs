@@ -12,6 +12,8 @@ import { D1Repository } from '../../src/adapters/repository/d1-repository.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const AUD = 'aud-mcp-h2';
+const MCP_AUD = 'aud-mcp-conector-h2';
+const MCP_CLIENT_ID = 'mcp-conector-h2.access';
 const MCP_TOKEN = 'local-test-mcp-bearer-0123456789abcd';
 const signer = createAccessSigner();
 const accessKey = await cryptoKeyFromPublic(signer.publicKey);
@@ -30,17 +32,35 @@ function env(extra = {}) {
     PUBLISHER_PROVIDER: 'youtube',
     ACCESS_TEAM_DOMAIN: 'team.example.com',
     ACCESS_AUD: AUD,
+    ACCESS_MCP_AUD: MCP_AUD,
+    MCP_SERVICE_TOKEN_CLIENT_ID: MCP_CLIENT_ID,
     MCP_BEARER_TOKEN: MCP_TOKEN,
     ...extra,
   };
 }
 
-function mcpRequest(token, body) {
+function serviceJwt(overrides = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  return signer.sign({
+    aud: MCP_AUD,
+    exp: now + 3600,
+    nbf: now - 30,
+    iss: 'https://team.example.com',
+    common_name: MCP_CLIENT_ID,
+    sub: '',
+    type: 'app',
+    ...overrides,
+  });
+}
+
+function mcpRequest(token, body, jwt = serviceJwt()) {
   return new Request('https://local.test/mcp', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
+      'cf-access-client-secret': 'no-debe-registrarse-ni-reenviarse',
+      ...(jwt ? { 'cf-access-jwt-assertion': jwt } : {}),
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(body),
@@ -60,28 +80,48 @@ async function rpc(dbEnv, token, method, params, id = 1) {
   return { status: res.status, messages, raw: messages ? null : await res.clone().json().catch(() => null) };
 }
 
-test('MCP sin bearer: 401 y no es un fallo de Access', async () => {
+test('MCP exige el JWT del conector y el bearer; si falta la config no ejecuta', async () => {
   const dbEnv = env();
   const exp = Math.floor(Date.now() / 1000) + 3600;
-  const jwt = signer.sign({ aud: AUD, exp, email: 'ana@example.com' });
-  const missing = await workerMod.fetch(mcpRequest(null, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }), dbEnv, { waitUntil() {} });
-  const missingBody = await missing.json();
-  assert.equal(missing.status, 401);
-  assert.equal(missingBody.error.code, 'UNAUTHENTICATED');
+  const person = signer.sign({ aud: AUD, exp, email: 'ana@example.com', iss: 'https://team.example.com', nbf: exp - 60 });
+  const otherName = serviceJwt({ common_name: 'cli-bot.access' });
+  const ping = { jsonrpc: '2.0', id: 1, method: 'ping' };
 
-  const wrong = await workerMod.fetch(mcpRequest('otra-clave-que-no-es-la-buena', { jsonrpc: '2.0', id: 1, method: 'ping' }), dbEnv, { waitUntil() {} });
+  const missingJwt = await workerMod.fetch(mcpRequest(MCP_TOKEN, ping, null), dbEnv, { waitUntil() {} });
+  const missingJwtBody = await missingJwt.json();
+  assert.equal(missingJwt.status, 401);
+  assert.equal(missingJwtBody.error.code, 'UNAUTHENTICATED');
+  assert.equal(JSON.stringify(missingJwtBody).includes('no-debe-registrarse'), false);
+
+  const uiAud = await workerMod.fetch(mcpRequest(MCP_TOKEN, ping, person), dbEnv, { waitUntil() {} });
+  assert.equal(uiAud.status, 401);
+  assert.equal((await uiAud.json()).error.code, 'UNAUTHENTICATED');
+
+  const wrongName = await workerMod.fetch(mcpRequest(MCP_TOKEN, ping, otherName), dbEnv, { waitUntil() {} });
+  assert.equal(wrongName.status, 401);
+
+  const missingBearer = await workerMod.fetch(mcpRequest(null, ping), dbEnv, { waitUntil() {} });
+  assert.equal(missingBearer.status, 401);
+  assert.equal((await missingBearer.json()).error.code, 'UNAUTHENTICATED');
+
+  const wrong = await workerMod.fetch(mcpRequest('otra-clave-que-no-es-la-buena', ping), dbEnv, { waitUntil() {} });
   assert.equal(wrong.status, 401);
 
-  const withJwtOnly = await workerMod.fetch(new Request('https://local.test/mcp', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'cf-access-jwt-assertion': jwt },
-    body: '{}',
-  }), dbEnv, { waitUntil() {} });
-  assert.equal(withJwtOnly.status, 401);
-
   const unset = env({ MCP_BEARER_TOKEN: undefined });
-  const open = await workerMod.fetch(mcpRequest(MCP_TOKEN, { jsonrpc: '2.0', id: 1, method: 'ping' }), unset, { waitUntil() {} });
+  const open = await workerMod.fetch(mcpRequest(MCP_TOKEN, ping), unset, { waitUntil() {} });
   assert.equal(open.status, 401);
+
+  for (const partial of [
+    { ACCESS_MCP_AUD: '' },
+    { MCP_SERVICE_TOKEN_CLIENT_ID: '' },
+    { ACCESS_TEAM_DOMAIN: '' },
+  ]) {
+    const closed = await workerMod.fetch(mcpRequest(MCP_TOKEN, ping), env(partial), { waitUntil() {} });
+    const closedBody = await closed.json();
+    assert.equal(closed.status, 503, JSON.stringify(partial));
+    assert.equal(closedBody.error.code, 'SERVER_MISCONFIGURED');
+    assert.equal(closedBody.result, undefined);
+  }
 });
 
 test('MCP con bearer: herramientas de la cola y ninguna de aprobar o publicar', async () => {

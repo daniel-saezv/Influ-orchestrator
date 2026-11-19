@@ -11,7 +11,7 @@ import { KvMediaStorage } from './adapters/storage/kv-media-storage.js';
 import { R2ObjectStore } from './adapters/storage/r2-object-store.js';
 import { verifyRequest } from './adapters/http/auth.js';
 import { applyHttpRateLimit, isAuthenticatedAttempt, purgeOldRateWindows } from './adapters/http/rate-limit.js';
-import { verifyAccessJwt, teamDomainHostname } from './adapters/http/access-jwt.js';
+import { omitAccessClientSecret, verifyAccessJwt, verifyMcpServiceToken, teamDomainHostname } from './adapters/http/access-jwt.js';
 import { allowEgressHost } from './adapters/http/egress-guard.js';
 import { installEgressGuard, drainEgressAttempts } from './adapters/http/egress-guard.js';
 import { receiveBatch } from './workflows/wf01-receive-batch.js';
@@ -44,12 +44,20 @@ function isMcpRoute(pathname) {
 }
 
 async function handleMcp(request, env, ctx) {
+  try {
+    await verifyMcpServiceToken(request, env, accessJwtDeps);
+  } catch (error) {
+    if (error instanceof DomainError && error.code === 'UNAUTHENTICATED') {
+      await applyHttpRateLimit(request, env, { scope: 'anon' });
+    }
+    throw error;
+  }
   const ok = await mcpBearerOk(request, env.MCP_BEARER_TOKEN);
   if (!ok) {
     await applyHttpRateLimit(request, env, { scope: 'anon' });
     return json(401, { ok: false, error: { code: 'UNAUTHENTICATED', message: 'MCP no autorizado' } });
   }
-  return createInfluMcpHandler(env)(request, env, ctx);
+  return createInfluMcpHandler(env)(omitAccessClientSecret(request), env, ctx);
 }
 
 async function maybeNotifyEncargo(env, ctx, method, pathname, data) {

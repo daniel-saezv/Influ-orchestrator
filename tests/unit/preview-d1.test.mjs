@@ -67,8 +67,10 @@ test('el AUD de preview no pisa el de producción', () => {
   const at = text.indexOf(marker);
   assert.ok(at > 0);
   assert.match(text.slice(0, at), new RegExp(`ACCESS_AUD = "${PRODUCTION_ACCESS_AUD}"`));
+  assert.match(text.slice(0, at), /ACCESS_JWT_REQUIRED = "true"/);
   assert.match(text.slice(at), new RegExp(`ACCESS_AUD = "${PREVIEW_ACCESS_AUD}"`));
   assert.doesNotMatch(text.slice(at), new RegExp(PRODUCTION_ACCESS_AUD));
+  assert.doesNotMatch(text.slice(at), /ACCESS_JWT_REQUIRED/);
 });
 
 test('lee la URL del JSON de wrangler preview aunque haya texto delante', () => {
