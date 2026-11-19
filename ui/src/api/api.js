@@ -36,7 +36,8 @@ async function request(path, { method = 'GET', body, headers, ...options } = {})
       if (!(body instanceof Blob)) init.headers = { ...JSON_HEADERS, ...headers }
     }
     return await jsonResponse(await fetch(path, init))
-  } catch {
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error
     return {
       ok: false,
       status: 0,
@@ -108,12 +109,13 @@ export async function createUpload(body) {
   return request('/v1/me/uploads', { method: 'POST', body })
 }
 
-export async function uploadPart(uploadId, partNumber, blob, suppliedSha256) {
+export async function uploadPart(uploadId, partNumber, blob, suppliedSha256, options = {}) {
   const sha256 = suppliedSha256 ?? await sha256Hex(blob)
   return request(`/v1/me/uploads/${encoded(uploadId)}/parts/${encoded(partNumber)}`, {
     method: 'PUT',
     body: blob,
     headers: { 'content-type': blob.type || 'application/octet-stream', 'x-content-sha256': sha256 },
+    signal: options.signal,
   })
 }
 

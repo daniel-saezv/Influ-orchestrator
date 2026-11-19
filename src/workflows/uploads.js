@@ -151,7 +151,12 @@ export async function putUploadPart(ctx, { email, uploadId, part, request, now }
     }
     if (saved !== 'saved' && saved !== 'same') {
       await r2.delete(key).catch(() => {});
-      throw err('CONFLICT', 'No se pudo registrar la parte', 409);
+      if (extra) {
+        await repo.releaseBytes(user.user_id, extra);
+        await repo.addReserved(session.upload_id, -extra, now);
+      }
+      await repo.releaseDaily(user.user_id, 'a', now);
+      throw err('R2_UNAVAILABLE', 'No se pudo registrar la parte', 503);
     }
     return { part: n, uploaded: true, already_uploaded: saved === 'same', sha256: stored.sha256 };
   } catch (error) {
