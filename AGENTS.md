@@ -46,13 +46,14 @@ La aceptación remota (`--target remote`), `node n8n/verify-sign-nodes.mjs` y `n
 
 ## Buenas prácticas
 
-- Sin comentarios en el código; el código debe ser autoexplicativo.
-- No crees `.md` largos de planes o decisiones. Documentación de producto en `README.md` y `docs/`; única excepción para material nuevo: un `README.md` acotado de una capa concreta (`ui/`, `bot/`, etc.).
+- Sin comentarios en el código.
+- Sin ficheros `.md` largos de planes o decisiones; excepción: README de una capa concreta del repositorio.
+- Tests: antes de añadir uno, comprobar si ya lo cubre un test existente (ampliarlo); eliminar los que dejen de aplicar.
 - El núcleo no elige red social ni almacenamiento. Un publisher nuevo implementa el puerto `SocialPublisher` y se registra en `src/adapters/publishers/registry.js`. Guía: `docs/guia-nuevos-adaptadores.md`.
 - Fail-closed: el valor por defecto es MOCK. LIVE sigue deshabilitado en esta build aunque lleguen variables o un cuerpo HTTP. No pongas `PUBLISHER_MODE=live` en `wrangler.toml`. La guardia de salida, en MOCK, no permite hosts de publicación. El único `fetch` de aplicación es el webhook del encargo, y solo hacia el host de `INFLU_WEBHOOK_URL` cuando ese secreto y `INFLU_WEBHOOK_SECRET` existen.
 - Secretos HMAC (`BOT_HMAC_SECRET`, `APPROVER_HMAC_SECRET`), el bearer del MCP (`MCP_BEARER_TOKEN`) y el webhook (`INFLU_WEBHOOK_URL`, `INFLU_WEBHOOK_SECRET`) solo con `wrangler secret put` o el panel. No van en git, en `wrangler.toml` ni en el workflow. El CLI usa `INFLU_BOT_HMAC_SECRET`, `INFLU_APPROVER_HMAC_SECRET` e `INFLU_BASE_URL`. Con Access, también `INFLU_CF_ACCESS_CLIENT_ID` e `INFLU_CF_ACCESS_CLIENT_SECRET`. Cómo conectar el MCP y la rutina, sin valores: `docs/mcp-grok.md`.
 - `wrangler deploy` conserva los secrets ya cargados en el Worker. Las migraciones D1 ya aplicadas a mano se sincronizan con `deploy/d1-migrations-sync.mjs` antes de `wrangler d1 migrations apply` (lo hace el job de `main`).
-- Pruebas con `node:test`, sin framework añadido. Antes de añadir un caso, comprueba si uno existente ya lo cubre y amplíalo; elimina tests obsoletos. La aceptación local no toca la cuenta de Cloudflare. `wrangler deploy --dry-run` y `wrangler dev` escriben estado en `.wrangler/`; está en `.gitignore`.
+- Pruebas con `node:test`, sin framework añadido. La aceptación local no toca la cuenta de Cloudflare. `wrangler deploy --dry-run` y `wrangler dev` escriben estado en `.wrangler/`; está en `.gitignore`.
 - Plantillas n8n: no las regeneres con `node n8n/build-workflows.mjs` salvo que el cambio sea ese generador; reescribe UUID en `n8n/workflows/`.
 - La UI usa `ui/src/api/api.js` en el build servido. Conserva `credentials: "same-origin"`, calcula los SHA-256 de las partes y del archivo en el teléfono y no guarda secretos HMAC, cuerpos ni tokens en el navegador. `fakeApi.js` queda solo para pruebas aisladas.
 
