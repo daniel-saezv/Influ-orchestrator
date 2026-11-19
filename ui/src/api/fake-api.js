@@ -62,7 +62,7 @@ function createAccountInternal(userId, name, email) {
 export function resetFakeApi({ onboarded = false, seedOtherAccount = false } = {}) {
   sequence = 0
   nowValue = Date.parse('2026-11-18T12:00:00.000Z')
-  options = { initialGlobalBytes: 0, transitionReads: 1 }
+  options = { initialGlobalBytes: 0, transitionReads: 1, previewMime: 'video/mp4' }
   state = newState()
   activeEmail = FAKE_ACCESS_EMAIL
   createUser(FAKE_ACCESS_EMAIL, onboarded ? 'Alex' : '', onboarded)
@@ -445,7 +445,7 @@ async function getEncargo(encargoId) {
       encargo.preview = {
         sha256,
         media_url: `/v1/me/media/${sha256}`,
-        mime: 'video/mp4',
+        mime: options.previewMime ?? 'video/mp4',
         width: 1080,
         height: 1920,
       }
@@ -463,7 +463,7 @@ async function getMedia(sha256) {
   return success({
     sha256,
     encargo_id: media.encargo_id,
-    content_type: 'video/mp4',
+    content_type: options.previewMime ?? 'video/mp4',
     width: 1080,
     height: 1920,
     url: `/v1/me/media/${sha256}`,
