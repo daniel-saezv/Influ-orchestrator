@@ -1,6 +1,6 @@
 # Esquema de datos (D1 `influ-poc-db`)
 
-Migraciones: `migrations/0001_init.sql` … `migrations/0005_r2_uploads.sql`. Una tabla por entidad (equivalente a n8n Data Tables).
+Migraciones: `migrations/0001_init.sql` … `migrations/0006_encargo_failed.sql`. Una tabla por entidad (equivalente a n8n Data Tables).
 
 | Tabla | Contenido | Claves |
 |---|---|---|
@@ -20,3 +20,6 @@ SHA-256 sobre JSON canónico (claves ordenadas) de: `batch_id`, `title`, `person
 
 ## Subidas (migración 0005)
 `encargo_assets.delete_pending` marca un objeto pendiente de borrar en R2. `upload_sessions` añade `mime`, `completed_at` y `bytes_reserved` (el hueco reservado al abrir la sesión). El cron borra las sesiones abiertas de más de 24 h y reintenta los borrados pendientes. No hay ciclo de vida en el bucket.
+
+## Estado `failed` (migración 0006)
+`encargos.status` admite `failed`. Lo escribe `POST /v1/encargos/:id/result` cuando el `head` de una parte o el SHA-256 del archivo no coinciden. El resto de estados no cambia.

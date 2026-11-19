@@ -109,10 +109,20 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
     httpMetadata: { contentType: 'video/mp4' },
   });
 
-  await repo.addEncargoAsset({
-    encargoId, userId: (await repo.ensureUser('ana@example.com', NOW_1)).user_id,
-    role: 'source', r2Key: 'src/origen', sha256: 'ef'.repeat(32), mime: 'video/mp4', sizeBytes: 500, version: 1, now: NOW_1,
+  const origin = new Uint8Array(500).fill(7);
+  const originSha = createHash('sha256').update(origin).digest('hex');
+  const originDigest = createHash('sha256').update(origin).digest();
+  await env.MEDIA_R2.put('src/origen', origin, {
+    sha256: originDigest.buffer.slice(originDigest.byteOffset, originDigest.byteOffset + originDigest.byteLength),
+    httpMetadata: { contentType: 'video/mp4' },
   });
+  const userId = (await repo.ensureUser('ana@example.com', NOW_1)).user_id;
+  await repo.addEncargoAsset({
+    encargoId, userId, role: 'source', r2Key: 'src/origen', sha256: originSha, mime: 'video/mp4', sizeBytes: 500, version: 1, now: NOW_1,
+  });
+  shim._raw.prepare(`INSERT INTO upload_sessions
+    (upload_id, user_id, encargo_id, expected_parts, received_parts, file_sha256, part_hashes_json, size_bytes, mime, bytes_reserved, created_at, updated_at, completed_at)
+    VALUES (?, ?, ?, 1, 1, ?, '{}', 500, 'video/mp4', 0, ?, ?, ?)`).run(crypto.randomUUID(), userId, encargoId, originSha, NOW_1, NOW_1, NOW_1);
   assert.equal(await repo.storedBytes('global'), 1500);
 
   const bobToken = person('bob@example.com');
@@ -163,7 +173,8 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   const claim2 = await bot.call('POST', `/v1/encargos/${encargoId}/claim`);
   assert.equal(claim2.status, 200);
   const ready2 = await bot.call('POST', `/v1/encargos/${encargoId}/result`, { body: {
-    synthetic: true, content_hash: HASH, deliverable: { r2_key: 'out/pieza-2', sha256: '12'.repeat(32), mime: 'video/mp4', size_bytes: 800 },
+    synthetic: true, content_hash: HASH, file_sha256: originSha,
+    deliverable: { r2_key: 'out/pieza-2', sha256: '12'.repeat(32), mime: 'video/mp4', size_bytes: 800 },
   } });
   assert.equal(ready2.data.version, 2);
   const approved = await json(await call('POST', `/v1/me/encargos/${encargoId}/decision`, person('ana@example.com'), {

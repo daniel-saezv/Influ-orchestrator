@@ -86,8 +86,10 @@ const ROUTES = [
   ['GET', /^\/v1\/audit$/, ['bot'], async (ctx, m, b, url) => ({ audit: await ctx.repo.listAudit(url.searchParams.get('batch_id')) })],
   ['GET', /^\/v1\/egress$/, ['bot'], async (ctx) => ({ mode: ctx.registry.config.mode, allowed_hosts: [], ...(await ctx.repo.listEgress()) })],
   ['GET', /^\/v1\/encargos$/, ['bot'], async (ctx, m, body, url) => listQueued(ctx.repo, url.searchParams.get('status'))],
-  ['POST', /^\/v1\/encargos\/([0-9a-f-]{36})\/claim$/, ['bot'], async (ctx, m) => claimEncargo(ctx.repo, { encargoId: m[1], now: ctx.now() })],
-  ['POST', /^\/v1\/encargos\/([0-9a-f-]{36})\/result$/, ['bot'], async (ctx, m, body) => submitEncargoResult(ctx.repo, { encargoId: m[1], body, now: ctx.now() })],
+  ['POST', /^\/v1\/encargos\/([0-9a-f-]{36})\/claim$/, ['bot'], async (ctx, m) => claimEncargo(ctx.repo, { encargoId: m[1], now: ctx.now(), actor: ctx.actor })],
+  ['POST', /^\/v1\/encargos\/([0-9a-f-]{36})\/result$/, ['bot'], async (ctx, m, body) => submitEncargoResult(ctx.repo, {
+    encargoId: m[1], body, now: ctx.now(), r2: ctx.r2, actor: ctx.actor,
+  })],
 ];
 
 export default {

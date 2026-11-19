@@ -258,12 +258,16 @@ export class D1Repository {
   }
 
   async listQueuedEncargos() {
-    const rows = (await this.db.prepare(`SELECT e.encargo_id, e.account_id, a.name AS account_name, e.kind, e.note, e.platforms_json, e.version
+    const rows = (await this.db.prepare(`SELECT e.encargo_id, e.account_id, a.name AS account_name, e.kind, e.note, e.platforms_json, e.version,
+      (SELECT u.file_sha256 FROM upload_sessions u
+        WHERE u.encargo_id = e.encargo_id AND u.completed_at IS NOT NULL
+        ORDER BY u.completed_at DESC LIMIT 1) AS file_sha256
       FROM encargos e JOIN accounts a ON a.account_id = e.account_id
       WHERE e.status = 'queued' ORDER BY e.created_at LIMIT 20`).all()).results;
     const assets = (await this.db.prepare(`SELECT s.encargo_id, s.role, s.r2_key, s.sha256, s.mime, s.size_bytes, s.version
       FROM encargo_assets s JOIN encargos e ON e.encargo_id = s.encargo_id
-      WHERE e.status = 'queued'`).all()).results;
+      WHERE e.status = 'queued' AND s.role = 'source' AND s.delete_pending = 0
+      ORDER BY s.r2_key`).all()).results;
     return rows.map((row) => ({
       encargo_id: row.encargo_id,
       account_id: row.account_id,
@@ -272,8 +276,30 @@ export class D1Repository {
       note: row.note,
       platforms: JSON.parse(row.platforms_json),
       version: row.version,
+      file_sha256: row.file_sha256 ?? null,
       assets: assets.filter((a) => a.encargo_id === row.encargo_id).map(({ encargo_id, ...rest }) => rest),
     }));
+  }
+
+  async listSourceAssets(encargoId) {
+    const r = await this.db.prepare(`SELECT role, r2_key, sha256, mime, size_bytes, version
+      FROM encargo_assets
+      WHERE encargo_id = ? AND role = 'source' AND delete_pending = 0
+      ORDER BY r2_key`).bind(encargoId).all();
+    return r.results;
+  }
+
+  async sourceFileSha(encargoId) {
+    const row = await this.db.prepare(`SELECT file_sha256 FROM upload_sessions
+      WHERE encargo_id = ? AND completed_at IS NOT NULL
+      ORDER BY completed_at DESC LIMIT 1`).bind(encargoId).first();
+    return row?.file_sha256 ?? null;
+  }
+
+  async failEncargo(encargoId, now) {
+    const r = await this.db.prepare(`UPDATE encargos SET status = 'failed', updated_at = ? WHERE encargo_id = ? AND status = 'claimed'`)
+      .bind(now, encargoId).run();
+    return r.meta.changes === 1;
   }
 
   async claimEncargo(encargoId, now) {

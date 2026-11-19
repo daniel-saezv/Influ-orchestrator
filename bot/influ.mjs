@@ -13,7 +13,7 @@
 //   node bot/influ.mjs dispatch [LOTE-0001]                       (ejecuta WF-03 a demanda)
 //   node bot/influ.mjs results LOTE-0001                          (informe de resultados)
 //   node bot/influ.mjs list | audit [LOTE-0001] | egress
-//   node bot/influ.mjs poll | queue                                   (una vuelta de la cola)
+//   node bot/influ.mjs poll | queue                                   (una vuelta de pruebas/CI; cola vacía no llama a Imagine)
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -69,10 +69,11 @@ switch (cmd) {
   case 'egress': show(await c.egress()); break;
   case 'poll':
   case 'queue': {
+    // Herramienta de pruebas y de CI. Sin INFLU_GROK_GENERATE_COMMAND no reclama ni llama a Imagine.
     const generatorCommand = process.env.INFLU_GROK_GENERATE_COMMAND;
     const generate = generatorCommand ? (encargo, integrity) => {
       const stdout = execFileSync(generatorCommand, [], {
-        input: JSON.stringify({ encargo, integrity: { sha256: integrity.sha256, sizeBytes: integrity.sizeBytes } }),
+        input: JSON.stringify({ encargo, integrity: integrity ? { sha256: integrity.sha256, sizeBytes: integrity.sizeBytes } : null }),
         encoding: 'utf8',
       });
       const result = JSON.parse(stdout);
