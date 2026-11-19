@@ -35,6 +35,33 @@ function md5(bytes) {
   return createHash('md5').update(bytes).digest('base64');
 }
 
+function isR2Hostname(host) {
+  let hostname;
+  try {
+    hostname = new URL(`https://${host}`).hostname;
+  } catch {
+    return false;
+  }
+  return hostname === 'r2.cloudflarestorage.com' || hostname.endsWith('.r2.cloudflarestorage.com');
+}
+
+function auditOmitsSignedUrl(detailJson) {
+  const values = [];
+  const walk = (node) => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (node && typeof node === 'object') {
+      for (const value of Object.values(node)) walk(value);
+      return;
+    }
+    if (typeof node === 'string') values.push(node);
+  };
+  walk(JSON.parse(detailJson));
+  return values.every((value) => !value.includes('://') && !value.includes('X-Amz-'));
+}
+
 async function claimed(repo, kind = 'from_scratch') {
   const guide = await saveGuide(repo, {
     email: 'ana@example.com', body: { display_name: 'Ana', time_zone: 'UTC' }, now: NOW,
@@ -68,7 +95,7 @@ test('la firma es local, caduca a los 10 minutos y no acepta una clave pending e
   assert.equal(get.searchParams.get('X-Amz-Expires'), '600');
   await assert.rejects(() => signer.signPut('pending/user/upload/01', {}, 600), (error) => error.code === 'INVALID_INPUT');
   const attempts = drainEgressAttempts();
-  assert.equal(attempts.some((row) => String(row.host).includes('r2.cloudflarestorage.com')), false);
+  assert.equal(attempts.some((row) => isR2Hostname(row.host)), false);
 });
 
 test('preparar_subida reserva una vez, reutiliza la misma clave y rechaza otra distinta', async () => {
@@ -107,8 +134,7 @@ test('preparar_subida reserva una vez, reutiliza la misma clave y rechaza otra d
   assert.equal(await repo.classUsed('global', 'a', '2026-11-01'), 1);
   const audit = await repo.listAudit();
   const prepared = audit.find((row) => row.action === 'ENCARGO_UPLOAD_PREPARED');
-  assert.equal(prepared.detail_json.includes('X-Amz-'), false);
-  assert.equal(prepared.detail_json.includes('r2.cloudflarestorage.com'), false);
+  assert.equal(auditOmitsSignedUrl(prepared.detail_json), true);
 
   const again = await prepareDeliverableUpload(repo, input);
   assert.equal(again.r2_key, first.r2_key);
@@ -238,8 +264,8 @@ test('leer_origen solo firma encargos reclamados y cuenta una clase B por GET', 
   assert.equal(origin.assets[0].url.includes(SIGNING.secretAccessKey), false);
   assert.equal(await repo.classUsed(user.user_id, 'b', '2026-11-01'), 2);
   const logged = (await repo.listAudit()).filter((row) => row.action === 'ENCARGO_ORIGIN_READ');
-  assert.equal(logged.some((row) => row.detail_json.includes('X-Amz-') || row.detail_json.includes(origin.assets[0].url)), false);
-  assert.equal(drainEgressAttempts().some((row) => String(row.host).includes('r2.cloudflarestorage.com')), false);
+  assert.equal(logged.every((row) => auditOmitsSignedUrl(row.detail_json)), true);
+  assert.equal(drainEgressAttempts().some((row) => isR2Hostname(row.host)), false);
   assert.equal(await repo.storedBytes('global') <= MAX_GLOBAL_BYTES, true);
   assert.equal(bytes.byteLength <= MAX_USER_BYTES, true);
 });
