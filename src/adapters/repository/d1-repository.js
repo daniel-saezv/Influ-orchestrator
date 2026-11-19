@@ -177,9 +177,11 @@ export class D1Repository {
   }
 
   async listEgress() {
-    const rows = (await this.db.prepare('SELECT at, host, url, allowed, context FROM egress_log ORDER BY id DESC LIMIT 200').all()).results;
-    const total = await this.db.prepare('SELECT COUNT(*) AS n FROM egress_log').first();
-    return { total: total.n, rows };
+    const [listed, total] = await Promise.all([
+      this.db.prepare('SELECT at, host, url, allowed, context FROM egress_log ORDER BY id DESC LIMIT 200').all(),
+      this.db.prepare('SELECT COUNT(*) AS n FROM egress_log').first(),
+    ]);
+    return { total: total.n, rows: listed.results };
   }
 
   async ensureUser(email, now) {
@@ -195,7 +197,9 @@ export class D1Repository {
   }
 
   async listAccounts(userId) {
-    const r = await this.db.prepare('SELECT account_id, name FROM accounts WHERE user_id = ? ORDER BY created_at').bind(userId).all();
+    const r = await this.db.prepare(`SELECT a.account_id, a.name, s.count AS streak_count, s.last_civil_day
+      FROM accounts a LEFT JOIN streaks s ON s.account_id = a.account_id
+      WHERE a.user_id = ? ORDER BY a.created_at`).bind(userId).all();
     return r.results;
   }
 
@@ -277,16 +281,20 @@ export class D1Repository {
   }
 
   async listQueuedEncargos() {
-    const rows = (await this.db.prepare(`SELECT e.encargo_id, e.account_id, a.name AS account_name, e.kind, e.note, e.platforms_json, e.format, e.targets_json, e.version,
+    const [listed, sourced] = await Promise.all([
+      this.db.prepare(`SELECT e.encargo_id, e.account_id, a.name AS account_name, e.kind, e.note, e.platforms_json, e.format, e.targets_json, e.version,
       (SELECT u.file_sha256 FROM upload_sessions u
         WHERE u.encargo_id = e.encargo_id AND u.completed_at IS NOT NULL
         ORDER BY u.completed_at DESC LIMIT 1) AS file_sha256
       FROM encargos e JOIN accounts a ON a.account_id = e.account_id
-      WHERE e.status = 'queued' ORDER BY e.created_at LIMIT 20`).all()).results;
-    const assets = (await this.db.prepare(`SELECT s.encargo_id, s.role, s.r2_key, s.sha256, s.mime, s.size_bytes, s.version
+      WHERE e.status = 'queued' ORDER BY e.created_at LIMIT 20`).all(),
+      this.db.prepare(`SELECT s.encargo_id, s.role, s.r2_key, s.sha256, s.mime, s.size_bytes, s.version
       FROM encargo_assets s JOIN encargos e ON e.encargo_id = s.encargo_id
       WHERE e.status = 'queued' AND s.role = 'source' AND s.delete_pending = 0
-      ORDER BY s.r2_key`).all()).results;
+      ORDER BY s.r2_key`).all(),
+    ]);
+    const rows = listed.results;
+    const assets = sourced.results;
     return rows.map((row) => ({
       encargo_id: row.encargo_id,
       account_id: row.account_id,
@@ -301,6 +309,13 @@ export class D1Repository {
       file_sha256: row.file_sha256 ?? null,
       assets: assets.filter((a) => a.encargo_id === row.encargo_id).map(({ encargo_id, ...rest }) => rest),
     }));
+  }
+
+  async listPreviewAssets(encargoId, version) {
+    const r = await this.db.prepare(`SELECT role, sha256, mime, size_bytes, version, delete_pending
+      FROM encargo_assets
+      WHERE encargo_id = ? AND role = 'deliverable' AND version = ? AND delete_pending = 0`).bind(encargoId, version).all();
+    return r.results;
   }
 
   async listSourceAssets(encargoId) {

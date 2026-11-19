@@ -43,11 +43,13 @@ export async function buildReview(batchId, ctx) {
 export async function buildResults(batchId, ctx) {
   const b = await ctx.repo.getBatch(batchId);
   if (!b) throw err('BATCH_NOT_FOUND', `No existe ${batchId}`, 404);
-  const all = await ctx.repo.listPublications(batchId);
+  const [all, approvals, versions, events] = await Promise.all([
+    ctx.repo.listPublications(batchId),
+    ctx.repo.listApprovals(batchId),
+    ctx.repo.listVersions(batchId),
+    ctx.repo.listEvents(batchId),
+  ]);
   const pubs = all.filter((p) => p.batch_version === b.version);
-  const approvals = await ctx.repo.listApprovals(batchId);
-  const versions = await ctx.repo.listVersions(batchId);
-  const events = await ctx.repo.listEvents(batchId);
   const L = [];
   L.push(`# Informe de resultados — ${b.batch_id}`);
   L.push('> **SIMULACIÓN (MOCK).** Ningún contenido se ha publicado en redes sociales reales. Los IDs y URLs son ficticios (dominio .invalid).');

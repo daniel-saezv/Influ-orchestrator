@@ -36,6 +36,7 @@ export function createR2Shim() {
     objects,
     failDelete,
     puts: 0,
+    gets: 0,
     async put(key, value, options = {}) {
       this.puts += 1;
       const bytes = Buffer.from(await readAll(value));
@@ -64,6 +65,7 @@ export function createR2Shim() {
       return { key, size: stored.bytes.byteLength, checksums: stored.checksums, httpMetadata: stored.httpMetadata };
     },
     async get(key) {
+      this.gets += 1;
       const stored = objects.get(key);
       if (!stored) return null;
       return {

@@ -92,7 +92,7 @@ function buildCtx(env, { actor, keyId }) {
   };
 }
 
-const json = (status, body) => new Response(JSON.stringify(body, null, 2), {
+const json = (status, body) => new Response(JSON.stringify(body), {
   status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-influ-mode': 'mock' },
 });
 
@@ -168,7 +168,7 @@ export default {
         }
         const mediaMatch = /^\/v1\/me\/media\/([^/]+)$/.exec(url.pathname);
         if (mediaMatch && request.method === 'GET') {
-          return await getMediaResponse(personCtx, { email, sha256: mediaMatch[1], now });
+          return await getMediaResponse(personCtx, { email, sha256: mediaMatch[1], now, request });
         }
         const personBytes = new Uint8Array(await request.arrayBuffer());
         if (personBytes.length > PERSON_BODY_MAX) throw err('INVALID_INPUT', 'Cuerpo demasiado grande', 400);

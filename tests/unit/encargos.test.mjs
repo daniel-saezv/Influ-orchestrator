@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { D1Repository } from '../../src/adapters/repository/d1-repository.js';
 import { civilDay, previousCivilDay } from '../../src/core/domain/encargos.js';
 import {
-  claimEncargo, createEncargo, decideEncargo, getStreak, saveGuide, scheduleEncargo, submitEncargoResult,
+  claimEncargo, createEncargo, decideEncargo, getMe, getStreak, saveGuide, scheduleEncargo, submitEncargoResult,
 } from '../../src/workflows/encargos.js';
 import { createD1Shim, createKvShim } from '../helpers/d1-shim.mjs';
 import { createR2Shim, seedObject } from '../helpers/r2-shim.mjs';
@@ -237,6 +237,7 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   assert.equal(approved.data.status, 'approved');
   const scheduled = await json(await call('POST', `/v1/me/encargos/${encargoId}/schedule`, person('ana@example.com'), { when: 'now' }));
   assert.equal(scheduled.data.status, 'scheduled');
+  assert.equal(scheduled.data.streak_days >= 1, true);
 
   const second = await json(await call('POST', '/v1/me/encargos', person('ana@example.com'), {
     account_id: accountId, kind: 'from_scratch', note: 'otro', format: 'short_video', targets: [{ platform: 'youtube', target: 'short' }],
@@ -252,6 +253,12 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   const streak = await json(await call('GET', `/v1/me/accounts/${accountId}/streak`, person('ana@example.com')));
   assert.equal(streak.data.time_zone, 'America/Los_Angeles');
   assert.equal(streak.data.count >= 1, true);
+  const me = await json(await call('GET', '/v1/me', person('ana@example.com')));
+  assert.equal(me.data.accounts.find((item) => item.account_id === accountId).streak_days, streak.data.count);
+  const indexNames = shim._raw.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((row) => row.name);
+  for (const name of ['idx_assets_encargo_role_version', 'idx_uploads_encargo_completed', 'idx_encargo_events_account_id', 'idx_encargos_account_updated']) {
+    assert.equal(indexNames.includes(name), true, name);
+  }
 
   const activity = await json(await call('GET', `/v1/me/accounts/${accountId}/activity`, person('ana@example.com')));
   assert.equal(activity.data.activity.some((row) => row.kind === 'scheduled'), true);
@@ -284,7 +291,10 @@ test('la racha usa el día civil de la zona, no el día UTC', async () => {
     await decideEncargo(repo, { email, encargoId: created.encargo_id, body: { decision: 'approve', version: 1, content_hash: HASH }, now });
     return scheduleEncargo(repo, { email, encargoId: created.encargo_id, body: { when: 'now' }, now });
   }
-  await closeOne('uno', NOW_1);
+  const closed = await closeOne('uno', NOW_1);
+  assert.equal(closed.streak_days, 1);
+  const me = await getMe(repo, { email, now: NOW_1 });
+  assert.equal(me.accounts[0].streak_days, 1);
   const first = await getStreak(repo, { email, accountId, now: NOW_1 });
   assert.equal(first.count, 1);
   assert.equal(first.last_civil_day, '2026-07-14');

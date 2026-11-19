@@ -10,14 +10,17 @@ import { releaseEncargoObjects } from './r2-gc.js';
 export async function verifyApproval(b, ctx) {
   const reasons = [];
   if (![BS.APPROVED, BS.PUBLISHING].includes(b.status)) reasons.push(`estado del lote ${b.status}`);
-  const a = await ctx.repo.getValidApproval(b.batch_id);
+  const [a, storedHash] = await Promise.all([
+    ctx.repo.getValidApproval(b.batch_id),
+    contentHash(b.payload),
+  ]);
   if (!a) reasons.push('no hay aprobación válida');
   else {
     if (a.version !== b.version) reasons.push(`aprobación de la versión ${a.version}, lote en versión ${b.version}`);
     if (a.content_hash !== b.content_hash) reasons.push('la huella aprobada no coincide con la actual');
   }
   if (b.approved_hash !== b.content_hash || b.approved_version !== b.version) reasons.push('registro de aprobación del lote incoherente');
-  if ((await contentHash(b.payload)) !== b.content_hash) reasons.push('el contenido almacenado no coincide con su huella');
+  if (storedHash !== b.content_hash) reasons.push('el contenido almacenado no coincide con su huella');
   return { valid: reasons.length === 0, reasons, approval: a };
 }
 

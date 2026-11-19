@@ -284,7 +284,7 @@ JWT de Access. Cada ruta resuelve el recurso con `users.email = claim`. Si el id
 
 | Método y ruta | Uso |
 |---|---|
-| `GET /v1/me` | Usuario, zona, si falta la guía, cuentas. |
+| `GET /v1/me` | Usuario, zona, si falta la guía, cuentas. Cada cuenta incluye `streak_days`. |
 | `POST /v1/me` | Cierra la guía: nombre y zona. |
 | `PATCH /v1/me` | Cambia el nombre. |
 | `POST /v1/me/accounts` | Nueva cuenta de creador. |
@@ -298,7 +298,7 @@ JWT de Access. Cada ruta resuelve el recurso con `users.email = claim`. Si el id
 | `GET /v1/me/media/:sha256` | Previa. 404 si el SHA no es de una cuenta de ese correo. |
 | `POST /v1/me/encargos/:id/decision` | `approve` o `changes`, con versión y huella. `changes` borra en R2 la pieza descartada y la versión anterior, y libera sus bytes. El origen sigue. |
 | `POST /v1/me/encargos/:id/cancel` | Borra en R2 el origen y todas las versiones, y libera sus bytes. |
-| `POST /v1/me/encargos/:id/schedule` | `now` o una hora, solo aprobado. |
+| `POST /v1/me/encargos/:id/schedule` | `now` o una hora, solo aprobado. La respuesta incluye `streak_days`. |
 | `GET /v1/me/accounts/:id/streak` | Racha. |
 | `GET /v1/me/accounts/:id/activity` | Auditoría visible: simulaciones de esa cuenta. |
 

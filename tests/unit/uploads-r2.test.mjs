@@ -120,8 +120,16 @@ test('subida: partes, reintento de la misma huella, lectura en bytes y aislamien
   assert.equal(media.status, 200);
   assert.equal(media.headers.get('content-type'), 'video/mp4');
   assert.equal(media.headers.get('x-content-sha256'), digest);
-  assert.equal(media.headers.get('cache-control'), 'private, no-store');
+  assert.equal(media.headers.get('cache-control'), 'private, max-age=31536000, immutable');
+  assert.equal(media.headers.get('etag'), `"${digest}"`);
   assert.deepEqual(new Uint8Array(await media.arrayBuffer()), bytes);
+  const gets = h.r2.gets;
+  const revalidated = await h.call('GET', `/v1/me/media/${digest}`, email, { headers: { 'if-none-match': `"${digest}"` } });
+  assert.equal(revalidated.status, 304);
+  assert.equal(revalidated.headers.get('etag'), `"${digest}"`);
+  assert.equal(h.r2.gets, gets);
+  const foreignCached = await h.call('GET', `/v1/me/media/${digest}`, 'bob@example.com', { headers: { 'if-none-match': `"${digest}"` } });
+  assert.equal(foreignCached.status, 404);
 
   await h.read(await h.call('POST', '/v1/me', 'bob@example.com', { json: { display_name: 'Bob', time_zone: 'UTC' } }));
   for (const [method, path, body] of [

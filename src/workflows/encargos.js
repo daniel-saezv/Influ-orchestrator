@@ -19,6 +19,20 @@ function requireGuide(user) {
   if (!user?.guide_seen_at) throw err('GUIDE_REQUIRED', 'Falta terminar la guía', 409);
 }
 
+function accountsWithStreak(accounts, timeZone, now) {
+  const today = timeZone ? civilDay(timeZone, now) : null;
+  return accounts.map((account) => {
+    const row = account.streak_count == null
+      ? null
+      : { count: account.streak_count, last_civil_day: account.last_civil_day };
+    return {
+      account_id: account.account_id,
+      name: account.name,
+      streak_days: today ? visibleStreak(row, today).count : 0,
+    };
+  });
+}
+
 function publicUser(user, accounts) {
   return {
     email: user.email,
@@ -77,7 +91,8 @@ async function requireOwnedEncargo(repo, email, encargoId) {
 
 export async function getMe(repo, { email, now }) {
   const user = await repo.ensureUser(email, now);
-  return publicUser(user, await repo.listAccounts(user.user_id));
+  const accounts = await repo.listAccounts(user.user_id);
+  return publicUser(user, accountsWithStreak(accounts, user.time_zone, now));
 }
 
 export async function saveGuide(repo, { email, body, now }) {
@@ -142,7 +157,7 @@ export async function listEncargos(repo, { email, now }) {
 
 export async function getEncargo(repo, { email, encargoId }) {
   const encargo = await requireOwnedEncargo(repo, email, encargoId);
-  return publicEncargo(encargo, await repo.listAssets(encargoId));
+  return publicEncargo(encargo, await repo.listPreviewAssets(encargo.encargo_id, encargo.version));
 }
 
 async function assertBatchHash(repo, batchId) {
@@ -237,9 +252,10 @@ export async function scheduleEncargo(repo, { email, encargoId, body, now, dispa
   if (!ok) throw err('CONFLICT', 'Solo se programa un encargo aprobado', 409);
   const today = civilDay(encargo.time_zone, now);
   const prev = await repo.streakRow(encargo.account_id);
-  await repo.saveStreak(encargo.account_id, nextStreakCount(prev, today), today, now);
+  const streakDays = nextStreakCount(prev, today);
+  await repo.saveStreak(encargo.account_id, streakDays, today, now);
   if (body.when === 'now' && encargo.batch_id && dispatchBatch) await dispatchBatch(encargo.batch_id);
-  return { encargo_id: encargo.encargo_id, status: 'scheduled', publish_at: publishAt };
+  return { encargo_id: encargo.encargo_id, status: 'scheduled', publish_at: publishAt, streak_days: streakDays };
 }
 
 export async function getStreak(repo, { email, accountId, now }) {
@@ -286,9 +302,7 @@ export async function listQueued(repo, status) {
   return { encargos: await repo.listQueuedEncargos() };
 }
 
-async function botEncargo(repo, encargoId) {
-  const row = await repo.encargoById(encargoId);
-  if (!row) return null;
+function presentBotEncargo(row, fileSha, assets) {
   return {
     encargo_id: row.encargo_id,
     account_id: row.account_id,
@@ -301,17 +315,34 @@ async function botEncargo(repo, encargoId) {
     targets: row.targets ?? null,
     legacy: row.legacy === true || row.format == null,
     version: row.version,
-    file_sha256: await repo.sourceFileSha(encargoId),
-    assets: await repo.listSourceAssets(encargoId),
+    file_sha256: fileSha,
+    assets,
   };
+}
+
+async function botEncargo(repo, encargoId) {
+  const row = await repo.encargoById(encargoId);
+  if (!row) return null;
+  const [fileSha, assets] = await Promise.all([
+    repo.sourceFileSha(encargoId),
+    repo.listSourceAssets(encargoId),
+  ]);
+  return presentBotEncargo(row, fileSha, assets);
 }
 
 export async function reviewEncargoForBot(repo, encargoId) {
   if (!UUID_RE.test(encargoId ?? '')) throw NOT_FOUND();
   const row = await repo.encargoById(encargoId);
   if (!row) throw NOT_FOUND();
-  const view = await botEncargo(repo, encargoId);
-  return { ...view, content_hash: row.content_hash ?? null, synthetic: row.synthetic };
+  const [fileSha, assets] = await Promise.all([
+    repo.sourceFileSha(encargoId),
+    repo.listSourceAssets(encargoId),
+  ]);
+  return {
+    ...presentBotEncargo(row, fileSha, assets),
+    content_hash: row.content_hash ?? null,
+    synthetic: row.synthetic,
+  };
 }
 
 export async function readClaimedOrigin(repo, { encargoId, now, r2, signer = null, env = null, actor = 'mcp' }) {
@@ -319,7 +350,10 @@ export async function readClaimedOrigin(repo, { encargoId, now, r2, signer = nul
   const row = await repo.encargoById(encargoId);
   if (!row) throw NOT_FOUND();
   if (row.status !== 'claimed') throw err('CONFLICT', 'El encargo no está reclamado', 409);
-  const assets = await repo.listSourceAssets(encargoId);
+  const [assets, fileSha] = await Promise.all([
+    repo.listSourceAssets(encargoId),
+    repo.sourceFileSha(encargoId),
+  ]);
   const activeSigner = assets.length ? (signer ?? null) : null;
   if (assets.length && !activeSigner) throw signingUnavailableError(env);
   const expiry = new Date(Date.parse(now) + PRESIGN_TTL_SECONDS * 1000).toISOString();
@@ -380,7 +414,7 @@ export async function readClaimedOrigin(repo, { encargoId, now, r2, signer = nul
     targets: row.targets ?? null,
     legacy: row.legacy === true || row.format == null,
     version: row.version,
-    file_sha256: await repo.sourceFileSha(encargoId),
+    file_sha256: fileSha,
     assets: checked,
   };
 }
@@ -423,6 +457,7 @@ async function markFailed(repo, encargo, now, actor, code) {
 async function checkSourceIntegrity(repo, r2, encargo, body, now, actor) {
   const assets = await repo.listSourceAssets(encargo.encargo_id);
   if (!assets.length) return;
+  const announcedPromise = repo.sourceFileSha(encargo.encargo_id).catch((error) => error);
   if (!r2) throw err('R2_UNAVAILABLE', 'El almacenamiento no está disponible', 503);
   for (const asset of assets) {
     const reserved = await repo.reserveDaily(encargo.user_id, 'b', now, MAX_CLASS_B_USER, MAX_CLASS_B_GLOBAL);
@@ -438,7 +473,8 @@ async function checkSourceIntegrity(repo, r2, encargo, body, now, actor) {
       await markFailed(repo, encargo, now, actor, 'INTEGRITY_PART_MISMATCH');
     }
   }
-  const announced = await repo.sourceFileSha(encargo.encargo_id);
+  const announced = await announcedPromise;
+  if (announced instanceof Error) throw announced;
   const reported = typeof body.file_sha256 === 'string' ? body.file_sha256.trim().toLowerCase() : '';
   const reportedOk = /^[a-f0-9]{64}$/.test(reported);
   if (body.failed === true && !reportedOk) await markFailed(repo, encargo, now, actor, failureCode(body));
