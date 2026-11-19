@@ -105,6 +105,16 @@ JSON `{ "sha256": "hex del archivo entero" }`. Exige todas las partes. No llama 
 
 `:sha256` es el hex de un asset de una cuenta de ese correo (cada parte y cada pieza tienen el suyo). El SHA del archivo entero, si no coincide con un objeto, no devuelve bytes. El cuerpo de la respuesta 200 son los bytes, sin envoltura JSON. Cabeceras: `content-type` del asset, `content-length`, `x-content-sha256` y `cache-control: private, no-store`. Si R2 guardó `checksums.sha256`, tiene que coincidir con la huella. Una pieza subida por URL prefirmada no trae ese checksum: se acepta si `checksums.md5` coincide con el MD5 guardado en la reserva, y `x-content-sha256` es el SHA-256 que el bot declaró al pedir la URL. R2 comprobó el MD5, no ese SHA-256. Cuesta una operación de clase B. Un asset pendiente de borrado responde 404. El 404 y el resto de errores siguen siendo JSON.
 
+## Listado de encargos de la persona
+
+`GET /v1/me/encargos`. JWT de Access, el mismo aislamiento que el resto de `/v1/me`: solo los encargos de las cuentas de ese correo, del más reciente al más antiguo, como máximo 100. `200`:
+
+```json
+{ "ok": true, "data": { "encargos": [{ "encargo_id": "uuid", "account_id": "uuid", "account_name": "Ana", "status": "queued", "kind": "from_scratch", "note": "idea", "platforms": ["youtube"], "version": 1, "created_at": "2026-11-19T12:00:00.000Z", "updated_at": "2026-11-19T12:00:00.000Z" }] } }
+```
+
+`status` es el de D1 (`draft`, `queued`, `claimed`, `ready`, `approved`, `scheduled`, `cancelled`, `failed`). Otro correo recibe una lista vacía, no los ajenos. Un service token responde 403 `ACCESS_DENIED`.
+
 ## API del bot (encargos)
 
 HMAC `bot` (nonce anti-replay). La clave del aprobador recibe 403. No lista usuarios ni lee `platform_connections`. Cada ítem trae solo las claves R2 de ese encargo.

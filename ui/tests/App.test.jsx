@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it } from 'vitest'
 import App from '../src/App.jsx'
@@ -10,6 +10,7 @@ describe('mobile creation flow', () => {
     configureFakeApi({ transitionReads: 0.5 })
     localStorage.clear()
     delete document.documentElement.dataset.theme
+    window.history.replaceState({}, '', '/')
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
   })
 
@@ -119,5 +120,59 @@ describe('mobile creation flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Estudio' }))
     expect(screen.getByRole('radio', { name: /Segunda/ })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('lists encargos from the server and reopens the same one after a reload', async () => {
+    resetFakeApi({ onboarded: true })
+    configureFakeApi({ transitionReads: 100 })
+    const user = userEvent.setup()
+    const view = render(<App api={fakeApi} />)
+
+    await user.click(await screen.findByRole('button', { name: 'Mis encargos' }))
+    expect(await screen.findByText('Todavía no tienes encargos')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Encargos' })).toHaveAttribute('aria-current', 'page')
+    await user.click(screen.getByRole('button', { name: 'Preparar el primero' }))
+
+    await user.type(screen.getByLabelText('Tu idea'), 'Una toma para mañana')
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    expect(await screen.findByRole('heading', { name: 'Revelando tu toma.' })).toBeInTheDocument()
+    expect(screen.getByText('Puedes cerrar la app; aquí verás el estado de tu encargo cuando vuelvas.')).toBeInTheDocument()
+    expect(screen.queryByText(/segundo plano/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inicio' })).toBeInTheDocument()
+    const encargoId = getFakeApiState().encargos.at(-1).id
+    await waitFor(() => expect(window.location.pathname).toBe(`/encargos/${encargoId}`))
+
+    await user.click(screen.getByRole('button', { name: 'Mis encargos' }))
+    expect(await screen.findByRole('heading', { name: 'Mis encargos' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Una toma para mañana/ })).toHaveTextContent('En cola')
+    expect(screen.getByText(/Actualizado/)).toBeInTheDocument()
+
+    view.unmount()
+    window.history.replaceState({}, '', `/encargos/${encargoId}`)
+    render(<App api={fakeApi} />)
+    expect(await screen.findByRole('heading', { name: 'Revelando tu toma.' })).toBeInTheDocument()
+    expect(window.location.pathname).toBe(`/encargos/${encargoId}`)
+
+    await user.click(screen.getByRole('button', { name: 'Mis encargos' }))
+    await user.click(await screen.findByRole('button', { name: 'Cancelar encargo' }))
+    await user.click(screen.getByRole('button', { name: 'Sí, cancelar' }))
+    expect(await screen.findByText('Cancelado')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancelar encargo' })).not.toBeInTheDocument()
+    expect(getFakeApiState().encargos.at(-1).status).toBe('cancelled')
+  })
+
+  it('does not poll an encargo while the page is hidden', async () => {
+    resetFakeApi({ onboarded: true })
+    configureFakeApi({ transitionReads: 100 })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    const user = userEvent.setup()
+    render(<App api={fakeApi} />)
+    await user.type(await screen.findByLabelText('Tu idea'), 'Sigo en segundo plano')
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    expect(await screen.findByRole('heading', { name: 'Revelando tu toma.' })).toBeInTheDocument()
+    expect(getFakeApiState().encargos.at(-1).reads).toBe(0)
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => expect(getFakeApiState().encargos.at(-1).reads).toBe(1))
   })
 })

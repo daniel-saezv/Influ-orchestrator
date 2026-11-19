@@ -121,6 +121,13 @@ export async function completeUpload(uploadId, body) {
   return request(`/v1/me/uploads/${encoded(uploadId)}/complete`, { method: 'POST', body })
 }
 
+export async function listEncargos() {
+  return mapResponse(await request('/v1/me/encargos'), (data) => ({
+    ...data,
+    encargos: (data.encargos ?? []).map(mapEncargo),
+  }))
+}
+
 export async function getEncargo(encargoId) {
   return mapResponse(
     await request(`/v1/me/encargos/${encoded(encargoId)}`),
@@ -215,6 +222,7 @@ export const api = {
   createAccount,
   updateAccount,
   createEncargo,
+  listEncargos,
   createUpload,
   uploadPart,
   completeUpload,

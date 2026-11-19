@@ -258,6 +258,17 @@ export class D1Repository {
     return row ? parseEncargo(row) : null;
   }
 
+  async listEncargosForEmail(email) {
+    const rows = (await this.db.prepare(`SELECT e.*, a.user_id, a.name AS account_name, u.email, u.time_zone
+      FROM encargos e
+      JOIN accounts a ON a.account_id = e.account_id
+      JOIN users u ON u.user_id = a.user_id
+      WHERE u.email = ?
+      ORDER BY e.updated_at DESC, e.created_at DESC
+      LIMIT 100`).bind(email).all()).results;
+    return rows.map((row) => parseEncargo(row));
+  }
+
   async encargoById(encargoId) {
     const row = await this.db.prepare(`SELECT e.*, a.user_id, a.name AS account_name
       FROM encargos e JOIN accounts a ON a.account_id = e.account_id

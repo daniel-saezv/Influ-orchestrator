@@ -80,6 +80,13 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   }));
   assert.equal(draft.data.status, 'draft');
 
+  const listed = await json(await call('GET', '/v1/me/encargos', person('ana@example.com')));
+  assert.equal(listed.status, 200);
+  assert.equal(listed.data.encargos.length, 2);
+  assert.equal(listed.data.encargos.find((item) => item.encargo_id === encargoId).status, 'queued');
+  assert.equal(listed.data.encargos.find((item) => item.encargo_id === draft.data.encargo_id).status, 'draft');
+  assert.equal(listed.data.encargos.every((item) => item.created_at && item.updated_at && item.account_name), true);
+
   const bot = new OrchestratorClient({
     baseUrl: 'https://local.test',
     botSecret: env.BOT_HMAC_SECRET,
@@ -168,6 +175,12 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   const serviceMe = await json(await call('GET', '/v1/me', service));
   assert.equal(serviceMe.status, 403);
   assert.equal(serviceMe.error.code, 'ACCESS_DENIED');
+  const serviceList = await json(await call('GET', '/v1/me/encargos', service));
+  assert.equal(serviceList.status, 403);
+  assert.equal(serviceList.error.code, 'ACCESS_DENIED');
+  const bobList = await json(await call('GET', '/v1/me/encargos', bobToken));
+  assert.equal(bobList.status, 200);
+  assert.deepEqual(bobList.data.encargos, []);
 
   const changes = await json(await call('POST', `/v1/me/encargos/${encargoId}/decision`, person('ana@example.com'), {
     decision: 'changes', version: 1, content_hash: HASH, note: 'Más corto',
@@ -224,6 +237,11 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
 
   const cancelled = await json(await call('POST', `/v1/me/encargos/${encargoId}/cancel`, person('ana@example.com')));
   assert.equal(cancelled.data.status, 'cancelled');
+  const afterCancel = await json(await call('GET', '/v1/me/encargos', person('ana@example.com')));
+  assert.equal(afterCancel.data.encargos.length, 3);
+  assert.equal(afterCancel.data.encargos.find((item) => item.encargo_id === encargoId).status, 'cancelled');
+  assert.equal(afterCancel.data.encargos.find((item) => item.encargo_id === second.data.encargo_id).status, 'scheduled');
+  assert.equal(afterCancel.data.encargos.find((item) => item.encargo_id === draft.data.encargo_id).status, 'draft');
   const left = shim._raw.prepare('SELECT COUNT(*) AS n FROM encargo_assets WHERE encargo_id = ?').get(encargoId);
   assert.equal(Number(left.n), 0);
 
