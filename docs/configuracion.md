@@ -14,10 +14,11 @@ Variables del Worker (`deploy/cloudflare.json` → bindings `plain_text`):
 | `RATE_LIMIT_ENABLED` | `true` | Límites por IP en D1 (ver `docs/seguridad-api.md`). |
 | `RATE_LIMIT_HEALTH_PER_MINUTE` | `120` | Máximo de `GET /v1/health` por IP y minuto. |
 | `RATE_LIMIT_ANON_PER_MINUTE` | `60` | Peticiones sin cabeceras HMAC completas por IP y minuto. |
-| `ACCESS_TEAM_DOMAIN` | *(vacío)* | Si se define junto con `ACCESS_AUD`, el Worker valida `Cf-Access-Jwt-Assertion`. |
-| `ACCESS_AUD` | *(vacío)* | AUD tag de la app Access; debe coincidir con el JWT. |
+| `ACCESS_TEAM_DOMAIN` | host del team | Con `ACCESS_AUD`, el Worker valida `Cf-Access-Jwt-Assertion`. En producción, si falta, 503. |
+| `ACCESS_AUD` | AUD de la app de la UI | Claim `aud` de la UI y de `/v1`. No es el de `/mcp`. |
+| `ACCESS_JWT_REQUIRED` | `true` en producción | Sin `ACCESS_TEAM_DOMAIN` o `ACCESS_AUD`, 503. La preview no la define. En Node, sin ella, las pruebas no exigen JWT. |
 
-**Secrets del Worker** (panel de Cloudflare o `wrangler secret put`): `BOT_HMAC_SECRET` (Grok Bot: lotes, despacho, consultas), `APPROVER_HMAC_SECRET` (solo decisiones), `MCP_BEARER_TOKEN` (conector MCP de `/mcp`), `INFLU_WEBHOOK_URL` y `INFLU_WEBHOOK_SECRET` (aviso a la rutina al crear un encargo en cola). Cómo conectarlos, sin valores: [mcp-grok.md](mcp-grok.md).
+**Secrets del Worker** (panel de Cloudflare o `wrangler secret put`): `BOT_HMAC_SECRET` (Grok Bot: lotes, despacho, consultas), `APPROVER_HMAC_SECRET` (solo decisiones), `MCP_BEARER_TOKEN`, `ACCESS_MCP_AUD` y `MCP_SERVICE_TOKEN_CLIENT_ID` (las dos capas de `/mcp`), `INFLU_WEBHOOK_URL` y `INFLU_WEBHOOK_SECRET` (aviso a la rutina al crear un encargo en cola). Cómo conectarlos, sin valores: [mcp-grok.md](mcp-grok.md).
 
 Variables plain text en [`wrangler.toml`](../wrangler.toml) (despliegue CI); `deploy/cloudflare.json` queda como referencia legacy — ver [`docs/despliegue-ci.md`](despliegue-ci.md).
 

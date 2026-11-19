@@ -328,7 +328,7 @@ Servidor MCP remoto en el mismo Worker ([Cloudflare Agents SDK](https://develope
 
 No hay herramienta de aprobar: la aprobación sigue siendo solo de la persona, por la UI con su JWT de Access.
 
-Autenticación propia del MCP (OAuth del conector o token dedicado), nunca abierta al público. Los secretos viven solo en el Worker (`wrangler secret put`). El teléfono y el navegador no reciben credenciales del conector.
+Autenticación del MCP, en dos capas (H3): el JWT de una aplicación Access que cubre solo `/mcp` (service token dedicado, `aud` propio y `common_name` igual a su Client ID) y el bearer `MCP_BEARER_TOKEN`. Las dos son obligatorias. No hay Bypass. Un JWT de persona de la UI no abre `/mcp`. Los secretos viven solo en el Worker (`wrangler secret put`). El teléfono y el navegador no reciben credenciales del conector.
 
 ### Webhook hacia Influ (fase H2)
 
@@ -384,7 +384,7 @@ Límites que ya están escritos y no cambian con esta elección: YouTube, 100 `v
 - 404 entre correos, en cada endpoint, con prueba de dos usuarios.
 - R2: reserva en D1 antes de la llamada; Standard; sin listar el bucket.
 - Hash: lo calcula el teléfono, lo comprueba R2 en el `put`, lo repite el bot y el cron lo contrasta con `head` antes de publicar. El Worker no lo calcula y ata la sesión al `user_id`.
-- Nonce anti-replay en las rutas HMAC. El endpoint MCP exige la autenticación propia de H2; no es anónimo.
+- Nonce anti-replay en las rutas HMAC. El endpoint MCP exige las dos capas de H3 (JWT de Access del conector y bearer); no es anónimo.
 - Webhook de Influ: URL y material de firma solo como secretos del Worker; un fallo de entrega no cancela el encargo.
 - La UI no puede enviar `mode`, `live` ni `publisher_mode`. El guard de CI sigue exigiendo MOCK.
 - `localStorage` solo guarda el id de la subida a medias, en ese origen.
@@ -405,6 +405,7 @@ Este documento es la fase 0. Cada fase siguiente va en su PR, con pruebas. Un so
 | G | Hecha. UI real en los assets del Worker, manifiesto PWA (sin service worker) y CI de la UI. [PR 24](https://github.com/daniel-saezv/Influ-orchestrator/pull/24), fusionada en `886b8c7`. | `ui/**`, `wrangler.toml` | Después de A, B, C y F |
 | H | Rutas HMAC del bot («API del bot»): `GET /v1/encargos?status=queued`, `POST /v1/encargos/:id/claim` y `POST /v1/encargos/:id/result`. HMAC `bot`, integridad R2, `synthetic`, `audit_log`. `bot/influ.mjs` como herramienta de pruebas y CI sobre esas rutas (cola vacía sin Imagine). Solo backend. | `src/worker.js`, `bot/influ.mjs`, `tests/` | Después de A y F. En paralelo con I y H2 |
 | H2 | MCP remoto (Agents SDK) sobre las mismas rutas; herramientas reclamar, leer origen, subir resultado y revisar estado; sin aprobar. Auth propia del conector. Webhook al crear encargo hacia la rutina Influ (secreto del Worker, fallo no bloquea cola); revisión de respaldo poco frecuente. Influ genera con Grok Imagine; `INFLU_GROK_GENERATE_COMMAND` deja de ser el camino principal. | `src/worker.js`, Agents SDK, secretos webhook/MCP, `tests/` | Después de H. En paralelo con I |
+| H3 | Hecha. `/mcp` exige el JWT de una aplicación Access solo de esa ruta (`ACCESS_MCP_AUD` y `common_name` = `MCP_SERVICE_TOKEN_CLIENT_ID`) y el bearer. Sin Bypass. En producción, el resto de rutas responde 503 si faltan `ACCESS_TEAM_DOMAIN` o `ACCESS_AUD`. | `src/adapters/http/access-jwt.js`, `src/worker.js`, `wrangler.toml`, `tests/`, `docs/mcp-grok.md`, `docs/seguridad-api.md` | Después de H2 |
 | I | Diseño visual de la UI. Identidad propia (paleta, acento, modo oscuro, tipografía, fondos con profundidad), animaciones con `prefers-reduced-motion`, componentes shadcn vía MCP de shadcn y `.agents/skills/shadcn`. Sin backend. Pruebas UI en verde; el usuario valida en la preview de la PR. | `ui/**` | Después de G. En paralelo con H y H2 |
 | J | iPhone: Safari, icono, Access dentro de la PWA, cámara, galería, audio, reanudación, previa 9:16, selector de cuentas. | Ajustes de `ui/` si la prueba lo pide | Después de I (y de H2 para flujo real con webhook) |
 | K | Service worker de la PWA: caché del shell y de los datos para usarla sin red o con mala cobertura, y notificaciones push en iPhone (hace falta la app en la pantalla de inicio). Pendiente, opcional y aplazable. | `ui/**` | Después de J. Se puede ir atrasando indefinidamente. |
@@ -418,6 +419,8 @@ La fase G está hecha. La [PR 24](https://github.com/daniel-saezv/Influ-orchestr
 La fase H implementa en el Worker la API de «API del bot», con HMAC `bot`, integridad en `result`, `synthetic` y `audit_log`, con pruebas unitarias y de aceptación. `bot/influ.mjs` queda como herramienta de pruebas y de CI sobre esas rutas (no es el camino de producción tras H2). Puede ir en paralelo con I y con la preparación de H2.
 
 La fase H2 añade el servidor MCP remoto (Agents SDK) y el webhook al crear encargo, según las subsecciones «MCP del bot» y «Webhook hacia Influ». Influ conecta el Worker como conector personalizado, usa las herramientas MCP en lugar del script y genera con Grok Imagine integrado en Grok. La revisión de respaldo cubre avisos perdidos. Todo sigue en MOCK.
+
+La fase H3 sustituye el Bypass de `/mcp` por una aplicación Access solo de esa ruta, con un service token distinto del CLI. El Worker exige el JWT de ese audience y el `common_name` del Client ID, además del bearer. Si falta esa config, `/mcp` responde 503 y no ejecuta herramientas. En producción, faltar `ACCESS_TEAM_DOMAIN` o `ACCESS_AUD` también cierra el resto de rutas; las previews siguen con sus vars de Access y las pruebas de Node, sin `ACCESS_JWT_REQUIRED`, no cambian. Sigue MOCK.
 
 La fase I cambia el aspecto de la UI que entregó G: minimalista, con identidad propia y animaciones que respetan `prefers-reduced-motion`. Solo `ui/`. Puede ir en paralelo con H y H2. Criterio de aceptación: el usuario valida el aspecto en la preview de la PR antes de fusionar.
 

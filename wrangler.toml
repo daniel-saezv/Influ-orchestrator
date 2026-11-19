@@ -47,6 +47,9 @@ RATE_LIMIT_HEALTH_PER_MINUTE = "120"
 RATE_LIMIT_ANON_PER_MINUTE = "60"
 ACCESS_TEAM_DOMAIN = "ancient-waterfall-b3eb.cloudflareaccess.com"
 ACCESS_AUD = "451e385e4fa58e74bc0f91981e92d9427ae34af5389d58bd62e81b36de3a8a8d"
+# Producción: sin ACCESS_TEAM_DOMAIN o ACCESS_AUD el Worker responde 503. La preview no copia esta var;
+# allí las dos vars de arriba siguen presentes y el runtime de Workers cierra igual si faltaran.
+ACCESS_JWT_REQUIRED = "true"
 
 # Previews de PR (`wrangler preview`). No heredan D1, KV, cron ni secretos de producción.
 # El cron queda solo en el Worker de producción. El KV MEDIA no se enlaza aquí.

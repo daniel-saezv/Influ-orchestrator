@@ -1,5 +1,8 @@
-// Validación opcional de Cf-Access-Jwt-Assertion (segunda capa tras Cloudflare Access en el edge).
-// Activa solo si ACCESS_TEAM_DOMAIN y ACCESS_AUD están definidas en el Worker.
+// Validación de Cf-Access-Jwt-Assertion (segunda capa tras Cloudflare Access en el edge).
+// Con ACCESS_TEAM_DOMAIN y ACCESS_AUD, todas las rutas salvo /mcp comprueban firma, aud y, si vienen, exp, nbf e iss.
+// En el runtime de Cloudflare, o con ACCESS_JWT_REQUIRED=true, faltar esas dos vars es 503: no se atiende la ruta.
+// En Node (pruebas y aceptación local), sin esa exigencia, la ausencia de vars deja la comprobación en pausa.
+// /mcp no usa este atajo: exige ACCESS_MCP_AUD y el common_name del service token del conector.
 import { err } from '../../core/domain/errors.js';
 import { allowEgressHost } from './egress-guard.js';
 
@@ -12,6 +15,17 @@ export function accessJwtEnabled(env = {}) {
   return !!(team && aud);
 }
 
+export function runningOnCloudflareWorkers() {
+  return globalThis.navigator?.userAgent === 'Cloudflare-Workers';
+}
+
+/** Producción (y cualquier Worker desplegado) no puede quedar sin Access. Node, sin la var, sí. */
+export function accessJwtMustBeConfigured(env = {}, deps = {}) {
+  if (String(env.ACCESS_JWT_REQUIRED ?? '').trim().toLowerCase() === 'true') return true;
+  if (typeof deps.onCloudflare === 'boolean') return deps.onCloudflare;
+  return runningOnCloudflareWorkers();
+}
+
 export function teamDomainHostname(env) {
   const raw = String(env.ACCESS_TEAM_DOMAIN ?? '').trim();
   if (!raw) return null;
@@ -21,6 +35,20 @@ export function teamDomainHostname(env) {
   } catch {
     return null;
   }
+}
+
+/** iss que firma Access: https://<team>.cloudflareaccess.com */
+export function accessTeamIssuer(env) {
+  const host = teamDomainHostname(env);
+  return host ? `https://${host}` : null;
+}
+
+export function mcpAccessConfigured(env = {}) {
+  return !!(
+    accessTeamIssuer(env)
+    && String(env.ACCESS_MCP_AUD ?? '').trim()
+    && String(env.MCP_SERVICE_TOKEN_CLIENT_ID ?? '').trim()
+  );
 }
 
 function decodeBase64Url(s) {
@@ -66,6 +94,31 @@ async function verifySignatureRs256(signingInput, signature, keys) {
   return false;
 }
 
+function audienceMatches(aud, expected) {
+  return Array.isArray(aud) ? aud.includes(expected) : aud === expected;
+}
+
+function assertLifetimeAndIssuer(payload, env, nowSec, strict) {
+  const expPresent = payload.exp !== undefined && payload.exp !== null && payload.exp !== '';
+  const nbfPresent = payload.nbf !== undefined && payload.nbf !== null && payload.nbf !== '';
+  const issPresent = payload.iss !== undefined && payload.iss !== null && payload.iss !== '';
+  if (strict && (!expPresent || !nbfPresent || !issPresent)) {
+    throw err('ACCESS_DENIED', 'JWT Access incompleto', 403);
+  }
+  if (expPresent) {
+    const exp = Number(payload.exp);
+    if (!Number.isFinite(exp) || nowSec >= exp) throw err('ACCESS_DENIED', 'JWT Access expirado', 403);
+  }
+  if (nbfPresent) {
+    const nbf = Number(payload.nbf);
+    if (!Number.isFinite(nbf) || nowSec < nbf) throw err('ACCESS_DENIED', 'JWT Access aún no válido', 403);
+  }
+  if (strict || issPresent) {
+    const expectedIss = accessTeamIssuer(env);
+    if (!expectedIss || payload.iss !== expectedIss) throw err('ACCESS_DENIED', 'Issuer JWT Access inválido', 403);
+  }
+}
+
 export async function loadKeysFromCertsJson(data) {
   const list = data?.public_certs ?? (data?.public_cert ? [data.public_cert] : []);
   const keys = new Map();
@@ -90,23 +143,24 @@ export async function fetchTeamCertKeys(env, fetchImpl = globalThis.fetch) {
   return keys;
 }
 
-/** @param {{ getCertKeys?: (env) => Promise<Map<string,CryptoKey>>, now?: number }} [deps] */
-export async function verifyAccessJwt(request, env, deps = {}) {
-  if (!accessJwtEnabled(env)) return null;
+/**
+ * @param {{ getCertKeys?: (env) => Promise<Map<string,CryptoKey>>, now?: number, onCloudflare?: boolean, fetchImpl?: typeof fetch }} [deps]
+ * @param {{ audience: string, strictClaims?: boolean }} options
+ */
+async function verifyAccessAssertion(request, env, deps, { audience, strictClaims }) {
   const token = request.headers.get('cf-access-jwt-assertion');
   if (!token) throw err('ACCESS_DENIED', 'Falta cabecera Cf-Access-Jwt-Assertion', 403);
 
   const parsed = parseJwt(token);
   if (!parsed) throw err('ACCESS_DENIED', 'JWT Access mal formado', 403);
+  if (parsed.header?.alg !== 'RS256') throw err('ACCESS_DENIED', 'JWT Access debe ir firmado con RS256', 403);
 
   const nowSec = Math.floor((deps.now ?? Date.now()) / 1000);
-  if (parsed.payload.exp !== undefined && nowSec >= Number(parsed.payload.exp)) {
-    throw err('ACCESS_DENIED', 'JWT Access expirado', 403);
+  assertLifetimeAndIssuer(parsed.payload, env, nowSec, !!strictClaims);
+
+  if (!audienceMatches(parsed.payload.aud, audience)) {
+    throw err('ACCESS_DENIED', 'Audience JWT Access inválido', 403);
   }
-  const aud = parsed.payload.aud;
-  const expected = String(env.ACCESS_AUD).trim();
-  const audOk = Array.isArray(aud) ? aud.includes(expected) : aud === expected;
-  if (!audOk) throw err('ACCESS_DENIED', 'Audience JWT Access inválido', 403);
 
   const kid = parsed.header.kid;
   const keyMap = deps.getCertKeys ? await deps.getCertKeys(env) : await fetchTeamCertKeys(env, deps.fetchImpl);
@@ -117,6 +171,72 @@ export async function verifyAccessJwt(request, env, deps = {}) {
     throw err('ACCESS_DENIED', 'Firma JWT Access inválida', 403);
   }
   return parsed.payload;
+}
+
+/** @param {{ getCertKeys?: (env) => Promise<Map<string,CryptoKey>>, now?: number, onCloudflare?: boolean }} [deps] */
+export async function verifyAccessJwt(request, env, deps = {}) {
+  if (!accessJwtEnabled(env)) {
+    if (accessJwtMustBeConfigured(env, deps)) {
+      throw err('SERVER_MISCONFIGURED', 'Faltan ACCESS_TEAM_DOMAIN o ACCESS_AUD', 503);
+    }
+    return null;
+  }
+  return verifyAccessAssertion(request, env, deps, {
+    audience: String(env.ACCESS_AUD).trim(),
+    strictClaims: false,
+  });
+}
+
+function commonNameMatches(presented, expected) {
+  if (typeof presented !== 'string' || typeof expected !== 'string') return false;
+  const a = new TextEncoder().encode(presented);
+  const b = new TextEncoder().encode(expected);
+  if (a.length !== b.length || a.length === 0) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+/**
+ * JWT de la aplicación Access que cubre solo /mcp.
+ * No exige email. common_name tiene que ser el Client ID del service token del conector.
+ * Un JWT de persona (aud de la UI) no pasa.
+ * Si falta la config, 503 y el llamador no debe ejecutar el conector.
+ */
+export async function verifyMcpServiceToken(request, env, deps = {}) {
+  if (!mcpAccessConfigured(env)) {
+    throw err('SERVER_MISCONFIGURED', 'Falta la configuración de Access para /mcp', 503);
+  }
+  let payload;
+  try {
+    payload = await verifyAccessAssertion(request, env, deps, {
+      audience: String(env.ACCESS_MCP_AUD).trim(),
+      strictClaims: true,
+    });
+  } catch (error) {
+    if (error?.code === 'ACCESS_DENIED') throw err('UNAUTHENTICATED', 'MCP no autorizado', 401);
+    throw error;
+  }
+  const expected = String(env.MCP_SERVICE_TOKEN_CLIENT_ID).trim();
+  if (!commonNameMatches(payload.common_name, expected)) {
+    throw err('UNAUTHENTICATED', 'MCP no autorizado', 401);
+  }
+  return payload;
+}
+
+/**
+ * La capa de aplicación no reenvía el secreto del service token ni el bearer.
+ * Tampoco vuelve a fijar cabeceras `cf-*`: en el runtime de Workers no están permitidas
+ * al construir una Request, y el JWT ya se validó antes de llegar al conector.
+ */
+export function omitAccessClientSecret(request) {
+  const headers = new Headers();
+  for (const [key, value] of request.headers) {
+    const name = key.toLowerCase();
+    if (name === 'cf-access-client-secret' || name === 'authorization' || name.startsWith('cf-')) continue;
+    headers.append(key, value);
+  }
+  return new Request(request, { headers });
 }
 
 export function resetAccessJwtCertCache() {

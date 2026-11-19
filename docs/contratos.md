@@ -125,4 +125,4 @@ HMAC `bot` (nonce anti-replay). La clave del aprobador recibe 403. No lista usua
 
 Si el `head` no coincide con D1, o `file_sha256` no es el anunciado (en una sola parte, tampoco el de esa parte), el encargo pasa a `failed` y la respuesta es 409 `INTEGRITY_PART_MISMATCH` o `INTEGRITY_FILE_MISMATCH`. Un cuerpo `{ "failed": true, "error": { "code": "…" } }` también lo deja en `failed`: es el camino del bucle cuando, al leer los bytes, el SHA-256 no cuadra. `bot/influ.mjs poll` hace una sola vuelta sobre estas rutas; si la cola está vacía, no reclama y no llama a Imagine.
 
-El conector MCP de producción expone las mismas operaciones en `/mcp` (`reclamar_encargo`, `leer_origen`, `subir_resultado`, `revisar_estado`), con bearer propio y sin herramienta de aprobar ni de publicar. Ver [mcp-grok.md](mcp-grok.md).
+El conector MCP de producción expone las mismas operaciones en `/mcp` (`reclamar_encargo`, `leer_origen`, `subir_resultado`, `revisar_estado`), con el JWT de Access de esa ruta y el bearer, y sin herramienta de aprobar ni de publicar. Ver [mcp-grok.md](mcp-grok.md).

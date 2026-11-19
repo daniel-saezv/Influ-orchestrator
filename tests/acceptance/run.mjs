@@ -477,10 +477,12 @@ if (target === 'local') {
     log.push('firma inválida=401; reclamo doble=409; file_sha256 distinto=409 y status failed; el bucle no genera si los bytes no cuadran; cola vacía sin Imagine');
   });
 
-  await T('EXTRA H2', 'MCP sin auth, sin aprobar, y el webhook no bloquea la cola', async (log) => {
+  await T('EXTRA H2', 'MCP con Access y bearer, sin aprobar, y el webhook no bloquea la cola', async (log) => {
     const { createD1Shim, createKvShim } = await import('../helpers/d1-shim.mjs');
     const { setEncargoWebhookTransport } = await import('../../src/adapters/http/encargo-webhook.js');
     const aud = 'aud-h2-aceptacion';
+    const mcpAud = 'aud-mcp-aceptacion';
+    const mcpClientId = 'mcp-aceptacion.access';
     const signer = createAccessSigner();
     const key = await cryptoKeyFromPublic(signer.publicKey);
     workerMod.setAccessJwtDeps({ getCertKeys: async () => new Map([['test-kid', key]]) });
@@ -490,16 +492,26 @@ if (target === 'local') {
       BOT_HMAC_SECRET: 'local-test-bot-secret-0123456789abcdef', APPROVER_HMAC_SECRET: 'local-test-approver-secret-0123456789ab',
       PUBLISHER_MODE: 'mock', PUBLISHER_PROVIDER: 'youtube',
       ACCESS_TEAM_DOMAIN: 'team.example.com', ACCESS_AUD: aud,
+      ACCESS_MCP_AUD: mcpAud, MCP_SERVICE_TOKEN_CLIENT_ID: mcpClientId,
       MCP_BEARER_TOKEN: tokenMcp,
     };
     const exp = Math.floor(Date.now() / 1000) + 3600;
+    const now = Math.floor(Date.now() / 1000);
     const jwt = signer.sign({ aud, exp, email: 'ana@example.com' });
-    const mcp = async (dbEnv, bearer, method) => {
+    const serviceJwt = signer.sign({
+      aud: mcpAud, exp, nbf: now - 30, iss: 'https://team.example.com', common_name: mcpClientId, sub: '', type: 'app',
+    });
+    const uiJwt = signer.sign({ aud, exp, nbf: now - 30, iss: 'https://team.example.com', email: 'ana@example.com' });
+    const otherName = signer.sign({
+      aud: mcpAud, exp, nbf: now - 30, iss: 'https://team.example.com', common_name: 'cli-aceptacion.access', sub: '', type: 'app',
+    });
+    const mcp = async (dbEnv, bearer, method, accessJwt = serviceJwt) => {
       const res = await workerMod.default.fetch(new Request('https://local.test/mcp', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           accept: 'application/json, text/event-stream',
+          ...(accessJwt ? { 'cf-access-jwt-assertion': accessJwt } : {}),
           ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
         },
         body: JSON.stringify({
@@ -510,11 +522,22 @@ if (target === 'local') {
       const text = await res.text();
       return { status: res.status, text };
     };
+    const noJwt = await mcp(baseEnv, tokenMcp, 'initialize', null);
+    eq(noJwt.status, 401, 'MCP sin JWT');
+    assert(noJwt.text.includes('UNAUTHENTICATED'), 'código sin JWT');
+    const uiOnly = await mcp(baseEnv, tokenMcp, 'initialize', uiJwt);
+    eq(uiOnly.status, 401, 'JWT con aud de la UI');
+    const wrongName = await mcp(baseEnv, tokenMcp, 'initialize', otherName);
+    eq(wrongName.status, 401, 'common_name distinto');
     const anon = await mcp(baseEnv, null, 'initialize');
     eq(anon.status, 401, 'MCP sin bearer');
     assert(anon.text.includes('UNAUTHENTICATED'), 'código MCP');
     const wrong = await mcp(baseEnv, 'bearer-distinto-de-prueba-0001', 'tools/list');
     eq(wrong.status, 401, 'bearer incorrecto');
+    const closed = await mcp({ ...baseEnv, ACCESS_MCP_AUD: '' }, tokenMcp, 'initialize');
+    eq(closed.status, 503, 'sin config de Access para /mcp');
+    assert(closed.text.includes('SERVER_MISCONFIGURED'), 'código de config');
+    assert(!closed.text.includes('tools'), 'no ejecuta el conector');
     const listed = await mcp(baseEnv, tokenMcp, 'tools/list');
     eq(listed.status, 200, 'tools/list');
     for (const name of ['reclamar_encargo', 'leer_origen', 'subir_resultado', 'revisar_estado']) {
@@ -560,7 +583,7 @@ if (target === 'local') {
     } finally {
       setEncargoWebhookTransport(null);
     }
-    log.push('MCP sin bearer=401; tools/list no tiene aprobar ni publicar; sin URL no hay POST; un POST que falla deja el encargo en cola');
+    log.push('sin JWT, aud de la UI, common_name distinto o sin bearer=401; sin config de /mcp=503 y no hay herramientas; tools/list no tiene aprobar ni publicar; sin URL no hay POST; un POST que falla deja el encargo en cola');
   });
 }
 
