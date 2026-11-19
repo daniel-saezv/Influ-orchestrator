@@ -22,7 +22,7 @@ import { normalizeEmail } from './core/domain/encargos.js';
 import { claimEncargo, dispatchPerson, listQueued, submitEncargoResult } from './workflows/encargos.js';
 import { reviewUnclaimedQueue } from './workflows/encargo-backup.js';
 import { getMediaResponse, putUploadPart } from './workflows/uploads.js';
-import { deleteOrphanUploads, retryPendingDeletes } from './workflows/r2-gc.js';
+import { deleteOrphanUploads, releaseExpiredReservations, retryPendingDeletes } from './workflows/r2-gc.js';
 import { mcpBearerOk } from './adapters/mcp/bearer.js';
 import { MCP_PATH, createInfluMcpHandler } from './adapters/mcp/influ-mcp.js';
 import { notifyEncargoQueued } from './adapters/http/encargo-webhook.js';
@@ -242,6 +242,11 @@ export default {
       } catch (e) {
         await ctx.repo.audit('cron', 'DISPATCH_ERROR', null, { code: e.code ?? 'INTERNAL', message: e.message });
       } finally {
+        try {
+          await releaseExpiredReservations(ctx);
+        } catch {
+          console.info(JSON.stringify({ event: 'reservation_release_error' }));
+        }
         try {
           const nowIso = new Date(event.scheduledTime ?? Date.now()).toISOString();
           await reviewUnclaimedQueue(ctx.repo, nowIso);

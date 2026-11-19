@@ -9,7 +9,8 @@ import {
   claimEncargo, createEncargo, decideEncargo, getStreak, saveGuide, scheduleEncargo, submitEncargoResult,
 } from '../../src/workflows/encargos.js';
 import { createD1Shim, createKvShim } from '../helpers/d1-shim.mjs';
-import { createR2Shim } from '../helpers/r2-shim.mjs';
+import { createR2Shim, seedObject } from '../helpers/r2-shim.mjs';
+import { MAX_GLOBAL_BYTES, MAX_USER_BYTES } from '../../src/core/domain/r2-quota.js';
 import { createAccessSigner, cryptoKeyFromPublic } from '../helpers/access-token.mjs';
 import { OrchestratorClient } from '../../bot/client-lib.mjs';
 import workerMod, { setAccessJwtDeps } from '../../src/worker.js';
@@ -99,15 +100,25 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   assert.equal(claim.status, 200);
   const rejected = await bot.call('POST', `/v1/encargos/${encargoId}/result`, { body: { synthetic: false, content_hash: HASH } });
   assert.equal(rejected.status, 400);
-  const ready = await bot.call('POST', `/v1/encargos/${encargoId}/result`, { body: {
+  const freeKey = await bot.call('POST', `/v1/encargos/${encargoId}/result`, { body: {
     synthetic: true, content_hash: HASH, deliverable: { r2_key: 'out/pieza', sha256: SHA, mime: 'video/mp4', size_bytes: 1000 },
   } });
-  assert.equal(ready.data.version, 1);
-  const digest = createHash('sha256').update(mediaBytes).digest();
-  await env.MEDIA_R2.put('out/pieza', mediaBytes, {
-    sha256: digest.buffer.slice(digest.byteOffset, digest.byteOffset + digest.byteLength),
-    httpMetadata: { contentType: 'video/mp4' },
+  assert.equal(freeKey.status, 400);
+  assert.equal(freeKey.error.code, 'INVALID_INPUT');
+  const userId = (await repo.ensureUser('ana@example.com', NOW_1)).user_id;
+  const pieceKey = `out/${encargoId}/1/${crypto.randomUUID()}`;
+  const seeded = seedObject(env.MEDIA_R2, pieceKey, mediaBytes, { contentType: 'video/mp4' });
+  await repo.reserveBytes(userId, mediaBytes.byteLength, MAX_USER_BYTES, MAX_GLOBAL_BYTES);
+  await repo.insertDeliverableReservation({
+    reservationId: crypto.randomUUID(), encargoId, userId, r2Key: pieceKey, version: 1, sha256: SHA,
+    contentMd5: seeded.md5, mime: 'video/mp4', sizeBytes: mediaBytes.byteLength, bytesHeld: mediaBytes.byteLength,
+    classAHeld: 0, quotaDay: '2026-11-19', expiresAt: '2027-01-01T00:00:00.000Z', now: NOW_1,
   });
+  const ready = await bot.call('POST', `/v1/encargos/${encargoId}/result`, { body: {
+    synthetic: true, content_hash: HASH, deliverable: { r2_key: pieceKey },
+  } });
+  assert.equal(ready.status, 200, JSON.stringify(ready.error));
+  assert.equal(ready.data.version, 1);
 
   const origin = new Uint8Array(500).fill(7);
   const originSha = createHash('sha256').update(origin).digest('hex');
@@ -116,14 +127,13 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
     sha256: originDigest.buffer.slice(originDigest.byteOffset, originDigest.byteOffset + originDigest.byteLength),
     httpMetadata: { contentType: 'video/mp4' },
   });
-  const userId = (await repo.ensureUser('ana@example.com', NOW_1)).user_id;
   await repo.addEncargoAsset({
     encargoId, userId, role: 'source', r2Key: 'src/origen', sha256: originSha, mime: 'video/mp4', sizeBytes: 500, version: 1, now: NOW_1,
   });
   shim._raw.prepare(`INSERT INTO upload_sessions
     (upload_id, user_id, encargo_id, expected_parts, received_parts, file_sha256, part_hashes_json, size_bytes, mime, bytes_reserved, created_at, updated_at, completed_at)
     VALUES (?, ?, ?, 1, 1, ?, '{}', 500, 'video/mp4', 0, ?, ?, ?)`).run(crypto.randomUUID(), userId, encargoId, originSha, NOW_1, NOW_1, NOW_1);
-  assert.equal(await repo.storedBytes('global'), 1500);
+  assert.equal(await repo.storedBytes('global'), 500 + mediaBytes.byteLength);
 
   const bobToken = person('bob@example.com');
   await json(await call('POST', '/v1/me', bobToken, { display_name: 'Bob', time_zone: 'UTC' }));
@@ -165,16 +175,25 @@ test('encargos: aislamiento, racha en la zona guardada, cola del bot y bytes', a
   assert.equal(changes.data.status, 'queued');
   const changedEncargo = await json(await call('GET', `/v1/me/encargos/${encargoId}`, person('ana@example.com')));
   assert.match(changedEncargo.data.note, /Cambios: Más corto$/);
-  assert.equal(changes.data.bytes_released, 1000);
+  assert.equal(changes.data.bytes_released, mediaBytes.byteLength);
   assert.equal(await repo.storedBytes('global'), 500);
   const assets = shim._raw.prepare('SELECT role FROM encargo_assets WHERE encargo_id = ?').all(encargoId);
   assert.deepEqual(assets.map((a) => a.role), ['source']);
 
   const claim2 = await bot.call('POST', `/v1/encargos/${encargoId}/claim`);
   assert.equal(claim2.status, 200);
+  const piece2 = new Uint8Array(800).fill(9);
+  const piece2Key = `out/${encargoId}/2/${crypto.randomUUID()}`;
+  const seeded2 = seedObject(env.MEDIA_R2, piece2Key, piece2, { contentType: 'video/mp4' });
+  await repo.reserveBytes(userId, piece2.byteLength, MAX_USER_BYTES, MAX_GLOBAL_BYTES);
+  await repo.insertDeliverableReservation({
+    reservationId: crypto.randomUUID(), encargoId, userId, r2Key: piece2Key, version: 2, sha256: seeded2.sha256,
+    contentMd5: seeded2.md5, mime: 'video/mp4', sizeBytes: piece2.byteLength, bytesHeld: piece2.byteLength,
+    classAHeld: 0, quotaDay: '2026-11-19', expiresAt: '2027-01-01T00:00:00.000Z', now: NOW_1,
+  });
   const ready2 = await bot.call('POST', `/v1/encargos/${encargoId}/result`, { body: {
     synthetic: true, content_hash: HASH, file_sha256: originSha,
-    deliverable: { r2_key: 'out/pieza-2', sha256: '12'.repeat(32), mime: 'video/mp4', size_bytes: 800 },
+    deliverable: { r2_key: piece2Key },
   } });
   assert.equal(ready2.data.version, 2);
   const approved = await json(await call('POST', `/v1/me/encargos/${encargoId}/decision`, person('ana@example.com'), {

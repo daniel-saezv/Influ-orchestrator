@@ -50,6 +50,9 @@ ACCESS_AUD = "451e385e4fa58e74bc0f91981e92d9427ae34af5389d58bd62e81b36de3a8a8d"
 # Producción: sin ACCESS_TEAM_DOMAIN o ACCESS_AUD el Worker responde 503. La preview no copia esta var;
 # allí las dos vars de arriba siguen presentes y el runtime de Workers cierra igual si faltaran.
 ACCESS_JWT_REQUIRED = "true"
+# Firma local de URLs de R2. Las claves van en secretos, no aquí.
+R2_ACCOUNT_ID = "f39f0d032bd902adf6dc9b5ed251f4ee"
+R2_BUCKET_NAME = "influ-poc-media"
 
 # Previews de PR (`wrangler preview`). No heredan D1, KV, cron ni secretos de producción.
 # El cron queda solo en el Worker de producción. El KV MEDIA no se enlaza aquí.
@@ -70,6 +73,8 @@ RATE_LIMIT_ANON_PER_MINUTE = "60"
 ACCESS_TEAM_DOMAIN = "ancient-waterfall-b3eb.cloudflareaccess.com"
 # App Access «influu-poc-orchestrator previews» (cfd654f0-28e2-4bb8-b6f5-6e247837638f). No es el AUD de producción.
 ACCESS_AUD = "65a4c70c4dc51d0a7ba55ff3bd6395e32244c8092a994241d3e5efe880e6cd46"
+R2_ACCOUNT_ID = "f39f0d032bd902adf6dc9b5ed251f4ee"
+R2_BUCKET_NAME = "influ-poc-media-preview"
 
 [[previews.d1_databases]]
 binding = "DB"

@@ -9,6 +9,14 @@ function bytesToHex(buffer) {
   return hex;
 }
 
+function bytesToBase64(buffer) {
+  if (!buffer || buffer.byteLength === 0) return '';
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 function hexToArrayBuffer(hex) {
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i += 1) out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
@@ -68,6 +76,7 @@ export class R2ObjectStore {
       key,
       size: Number(obj.size),
       sha256: bytesToHex(obj.checksums?.sha256),
+      md5: bytesToBase64(obj.checksums?.md5),
       mime: obj.httpMetadata?.contentType ?? null,
     };
   }
@@ -85,6 +94,7 @@ export class R2ObjectStore {
       body: obj.body,
       size: Number(obj.size),
       sha256: bytesToHex(obj.checksums?.sha256),
+      md5: bytesToBase64(obj.checksums?.md5),
       mime: obj.httpMetadata?.contentType ?? 'application/octet-stream',
     };
   }

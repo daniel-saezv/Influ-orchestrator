@@ -103,7 +103,7 @@ JSON `{ "sha256": "hex del archivo entero" }`. Exige todas las partes. No llama 
 
 ### `GET /v1/me/media/:sha256`
 
-`:sha256` es el hex de un asset de una cuenta de ese correo (cada parte y cada pieza tienen el suyo). El SHA del archivo entero, si no coincide con un objeto, no devuelve bytes. El cuerpo de la respuesta 200 son los bytes, sin envoltura JSON. Cabeceras: `content-type` del asset, `content-length`, `x-content-sha256` con el checksum de R2 y `cache-control: private, no-store`. Cuesta una operación de clase B. Un asset pendiente de borrado responde 404. El 404 y el resto de errores siguen siendo JSON.
+`:sha256` es el hex de un asset de una cuenta de ese correo (cada parte y cada pieza tienen el suyo). El SHA del archivo entero, si no coincide con un objeto, no devuelve bytes. El cuerpo de la respuesta 200 son los bytes, sin envoltura JSON. Cabeceras: `content-type` del asset, `content-length`, `x-content-sha256` y `cache-control: private, no-store`. Si R2 guardó `checksums.sha256`, tiene que coincidir con la huella. Una pieza subida por URL prefirmada no trae ese checksum: se acepta si `checksums.md5` coincide con el MD5 guardado en la reserva, y `x-content-sha256` es el SHA-256 que el bot declaró al pedir la URL. R2 comprobó el MD5, no ese SHA-256. Cuesta una operación de clase B. Un asset pendiente de borrado responde 404. El 404 y el resto de errores siguen siendo JSON.
 
 ## API del bot (encargos)
 
@@ -118,11 +118,11 @@ HMAC `bot` (nonce anti-replay). La clave del aprobador recibe 403. No lista usua
 `result` correcto, sin origen o con la huella que anunció el teléfono y partes que coinciden:
 
 ```json
-{ "synthetic": true, "content_hash": "hex", "file_sha256": "hex del archivo", "batch_id": "opcional", "deliverable": { "r2_key": "out/…", "sha256": "hex", "mime": "video/mp4", "size_bytes": 1 } }
+{ "synthetic": true, "content_hash": "hex", "file_sha256": "hex del archivo", "batch_id": "opcional", "deliverable": { "r2_key": "out/…" } }
 ```
 
-`file_sha256` es obligatorio si hay partes de origen. Desde cero, `synthetic` tiene que ser true. La respuesta 200 deja el encargo en `ready` y escribe `audit_log` con `account_id`.
+`deliverable.r2_key` tiene que ser una reserva emitida por `preparar_subida` para ese encargo. El Worker hace `head`: el objeto existe, el tamaño es el reservado y `checksums.md5` es el `Content-MD5` firmado. El head de la pieza cuenta una clase B. Entonces enlaza la pieza con el SHA-256, el MIME y el tamaño de esa reserva. Una clave libre, o un objeto que no cuadra, no pasa el encargo a `ready`. `file_sha256` es obligatorio si hay partes de origen. Desde cero, `synthetic` tiene que ser true. La respuesta 200 deja el encargo en `ready` y escribe `audit_log` con `account_id`.
 
 Si el `head` no coincide con D1, o `file_sha256` no es el anunciado (en una sola parte, tampoco el de esa parte), el encargo pasa a `failed` y la respuesta es 409 `INTEGRITY_PART_MISMATCH` o `INTEGRITY_FILE_MISMATCH`. Un cuerpo `{ "failed": true, "error": { "code": "…" } }` también lo deja en `failed`: es el camino del bucle cuando, al leer los bytes, el SHA-256 no cuadra. `bot/influ.mjs poll` hace una sola vuelta sobre estas rutas; si la cola está vacía, no reclama y no llama a Imagine.
 
-El conector MCP de producción expone las mismas operaciones en `/mcp` (`reclamar_encargo`, `leer_origen`, `subir_resultado`, `revisar_estado`), con el JWT de Access de esa ruta y el bearer, y sin herramienta de aprobar ni de publicar. Ver [mcp-grok.md](mcp-grok.md).
+El conector MCP de producción expone la cola en `/mcp` (`reclamar_encargo`, `leer_origen`, `preparar_subida`, `subir_resultado`, `revisar_estado`), con el JWT de Access de esa ruta y el bearer, y sin herramienta de aprobar ni de publicar. Ver [mcp-grok.md](mcp-grok.md).

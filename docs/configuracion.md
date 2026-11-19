@@ -18,7 +18,7 @@ Variables del Worker (`deploy/cloudflare.json` → bindings `plain_text`):
 | `ACCESS_AUD` | AUD de la app de la UI | Claim `aud` de la UI y de `/v1`. No es el de `/mcp`. |
 | `ACCESS_JWT_REQUIRED` | `true` en producción | Sin `ACCESS_TEAM_DOMAIN` o `ACCESS_AUD`, 503. La preview no la define. En Node, sin ella, las pruebas no exigen JWT. |
 
-**Secrets del Worker** (panel de Cloudflare o `wrangler secret put`): `BOT_HMAC_SECRET` (Grok Bot: lotes, despacho, consultas), `APPROVER_HMAC_SECRET` (solo decisiones), `MCP_BEARER_TOKEN`, `ACCESS_MCP_AUD` y `MCP_SERVICE_TOKEN_CLIENT_ID` (las dos capas de `/mcp`), `INFLU_WEBHOOK_URL` y `INFLU_WEBHOOK_SECRET` (aviso a la rutina al crear un encargo en cola). Cómo conectarlos, sin valores: [mcp-grok.md](mcp-grok.md).
+**Secrets del Worker** (panel de Cloudflare o `wrangler secret put`): `BOT_HMAC_SECRET` (Grok Bot: lotes, despacho, consultas), `APPROVER_HMAC_SECRET` (solo decisiones), `MCP_BEARER_TOKEN`, `ACCESS_MCP_AUD` y `MCP_SERVICE_TOKEN_CLIENT_ID` (las dos capas de `/mcp`), `INFLU_WEBHOOK_URL` y `INFLU_WEBHOOK_SECRET` (aviso a la rutina al crear un encargo en cola), `R2_ACCESS_KEY_ID` y `R2_SECRET_ACCESS_KEY` (firma local de URLs de un bucket). `R2_ACCOUNT_ID` y `R2_BUCKET_NAME` van en `[vars]`, no como secreto. Cómo conectarlos, sin valores: [mcp-grok.md](mcp-grok.md).
 
 Variables plain text en [`wrangler.toml`](../wrangler.toml) (despliegue CI); `deploy/cloudflare.json` queda como referencia legacy — ver [`docs/despliegue-ci.md`](despliegue-ci.md).
 

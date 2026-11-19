@@ -17,6 +17,18 @@ function asBuffer(value) {
   return Buffer.from(value);
 }
 
+export function seedObject(shim, key, bytes, { contentType = 'application/octet-stream', sha256 = false } = {}) {
+  const buf = Buffer.from(bytes);
+  const md5 = createHash('md5').update(buf).digest();
+  const checksums = { md5: md5.buffer.slice(md5.byteOffset, md5.byteOffset + md5.byteLength) };
+  if (sha256) {
+    const hash = createHash('sha256').update(buf).digest();
+    checksums.sha256 = hash.buffer.slice(hash.byteOffset, hash.byteOffset + hash.byteLength);
+  }
+  shim.objects.set(key, { bytes: buf, httpMetadata: { contentType }, checksums });
+  return { md5: md5.toString('base64'), sha256: createHash('sha256').update(buf).digest('hex'), size: buf.byteLength };
+}
+
 export function createR2Shim() {
   const objects = new Map();
   const failDelete = new Set();
@@ -28,6 +40,7 @@ export function createR2Shim() {
       this.puts += 1;
       const bytes = Buffer.from(await readAll(value));
       const hash = createHash('sha256').update(bytes).digest();
+      const md5 = createHash('md5').update(bytes).digest();
       if (options.sha256) {
         const given = asBuffer(options.sha256);
         if (!given.equals(hash)) {
@@ -40,7 +53,8 @@ export function createR2Shim() {
         throw new Error(`storage class ${options.storageClass}`);
       }
       const checksum = hash.buffer.slice(hash.byteOffset, hash.byteOffset + hash.byteLength);
-      const stored = { bytes, httpMetadata: options.httpMetadata ?? {}, checksums: { sha256: checksum } };
+      const md5sum = md5.buffer.slice(md5.byteOffset, md5.byteOffset + md5.byteLength);
+      const stored = { bytes, httpMetadata: options.httpMetadata ?? {}, checksums: { sha256: checksum, md5: md5sum } };
       objects.set(key, stored);
       return { key, size: bytes.byteLength, checksums: stored.checksums, httpMetadata: stored.httpMetadata };
     },

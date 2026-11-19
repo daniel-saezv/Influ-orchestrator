@@ -96,9 +96,11 @@ Los secretos del Worker de producción no pasan a la preview. `/v1/health` no lo
 ```bash
 npx wrangler preview base-config secret put BOT_HMAC_SECRET
 npx wrangler preview base-config secret put APPROVER_HMAC_SECRET
+npx wrangler preview base-config secret put R2_ACCESS_KEY_ID
+npx wrangler preview base-config secret put R2_SECRET_ACCESS_KEY
 ```
 
-Sin esos secretos, las rutas HMAC responden error de configuración. `wrangler deploy` en `main` sigue conservando los secretos del Worker de producción.
+Sin los HMAC, las rutas firmadas responden error de configuración. Sin el par R2 de `influ-poc-media-preview`, `leer_origen` (si hay origen) y `preparar_subida` responden `R2_SIGNING_UNAVAILABLE`; el resto del Worker sigue. El token de preview no es el de producción. `wrangler deploy` en `main` sigue conservando los secretos del Worker de producción. En producción los dos secretos R2 se cargan con `npx wrangler secret put`, para el bucket `influ-poc-media`.
 
 ## Migraciones D1 ya aplicadas a mano
 

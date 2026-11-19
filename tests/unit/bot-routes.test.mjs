@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { OrchestratorClient, pollEncargoOnce, sign } from '../../bot/client-lib.mjs';
 import { R2ObjectStore } from '../../src/adapters/storage/r2-object-store.js';
 import { createD1Shim, createKvShim } from '../helpers/d1-shim.mjs';
-import { createR2Shim } from '../helpers/r2-shim.mjs';
+import { createR2Shim, seedObject } from '../helpers/r2-shim.mjs';
+import { D1Repository } from '../../src/adapters/repository/d1-repository.js';
+import { MAX_GLOBAL_BYTES, MAX_USER_BYTES } from '../../src/core/domain/r2-quota.js';
 import { createAccessSigner, cryptoKeyFromPublic } from '../helpers/access-token.mjs';
 import workerMod, { setAccessJwtDeps } from '../../src/worker.js';
 
@@ -155,9 +157,29 @@ test('rutas HMAC del bot: firma inválida, reclamo doble y hash que no cuadra', 
   const third = await queuedEdit(h, 'ana@example.com', thirdBytes);
   const claimOk = await h.bot.claimEncargo(third.encargoId);
   assert.equal(claimOk.status, 200);
-  const ready = await h.bot.submitEncargoResult(third.encargoId, {
+  const freePiece = await h.bot.submitEncargoResult(third.encargoId, {
     synthetic: false, content_hash: HASH, file_sha256: third.digest,
     deliverable: { r2_key: 'out/pieza-ok', sha256: third.digest, mime: 'video/mp4', size_bytes: thirdBytes.byteLength },
+  });
+  assert.equal(freePiece.status, 400);
+  assert.equal(freePiece.error.code, 'INVALID_INPUT');
+  const stillClaimed = await h.read(await h.call('GET', `/v1/me/encargos/${third.encargoId}`, third.email));
+  assert.equal(stillClaimed.data.status, 'claimed');
+  const repo = new D1Repository(h.shim);
+  const owner = await repo.userByEmail(third.email);
+  const pieceKey = `out/${third.encargoId}/1/${crypto.randomUUID()}`;
+  const seeded = seedObject(h.r2, pieceKey, thirdBytes, { contentType: 'video/mp4' });
+  const stagedAt = new Date().toISOString();
+  await repo.reserveBytes(owner.user_id, thirdBytes.byteLength, MAX_USER_BYTES, MAX_GLOBAL_BYTES);
+  await repo.insertDeliverableReservation({
+    reservationId: crypto.randomUUID(), encargoId: third.encargoId, userId: owner.user_id, r2Key: pieceKey,
+    version: 1, sha256: third.digest, contentMd5: seeded.md5, mime: 'video/mp4', sizeBytes: thirdBytes.byteLength,
+    bytesHeld: thirdBytes.byteLength, classAHeld: 0, quotaDay: stagedAt.slice(0, 10),
+    expiresAt: new Date(Date.now() + 600_000).toISOString(), now: stagedAt,
+  });
+  const ready = await h.bot.submitEncargoResult(third.encargoId, {
+    synthetic: false, content_hash: HASH, file_sha256: third.digest,
+    deliverable: { r2_key: pieceKey },
   });
   assert.equal(ready.status, 200, JSON.stringify(ready.error));
   assert.equal(ready.data.status, 'ready');

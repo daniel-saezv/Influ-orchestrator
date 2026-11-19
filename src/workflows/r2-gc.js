@@ -47,6 +47,24 @@ export async function deleteOrphanUploads(ctx, limit = 5) {
   return sessions.length;
 }
 
+export async function releaseReservationHold(repo, row, now) {
+  const released = await repo.markReservationReleased(row.reservation_id, now);
+  if (!released) return false;
+  if (Number(row.bytes_held) > 0) await repo.releaseBytes(row.user_id, Number(row.bytes_held));
+  if (Number(row.class_a_held) > 0) await repo.releaseDaily(row.user_id, 'a', String(row.quota_day));
+  return true;
+}
+
+export async function releaseExpiredReservations(ctx, limit = 20) {
+  const now = ctx.now();
+  const rows = await ctx.repo.listExpiredReservations(now, limit);
+  let released = 0;
+  for (const row of rows) {
+    if (await releaseReservationHold(ctx.repo, row, now)) released += 1;
+  }
+  return released;
+}
+
 export async function releaseEncargoObjects(ctx, batchId) {
   const encargo = await ctx.repo.encargoByBatch(batchId);
   if (!encargo) return { bytes: 0, failed: 0 };
