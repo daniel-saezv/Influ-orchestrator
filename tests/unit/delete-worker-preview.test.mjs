@@ -4,6 +4,7 @@ import {
   deleteWorkerPreviewByName,
   findPreviewByName,
   isPreviewNotFound,
+  previewRowsFromResult,
   workerNameFromWranglerToml,
 } from '../../deploy/delete-worker-preview.mjs';
 
@@ -28,10 +29,60 @@ test('workerNameFromWranglerToml lee el nombre del Worker', () => {
   assert.equal(name, 'influ-poc-orchestrator');
 });
 
-test('deleteWorkerPreviewByName lista, resuelve id y borra', async () => {
+test('previewRowsFromResult admite array o campo previews', () => {
+  assert.equal(previewRowsFromResult([{ id: 'a' }]).length, 1);
+  assert.equal(previewRowsFromResult({ previews: [{ id: 'b' }] })[0].id, 'b');
+  assert.equal(previewRowsFromResult(null).length, 0);
+});
+
+test('deleteWorkerPreviewByName resuelve por GET del nombre y borra por id', async () => {
   const calls = [];
   const fetchFn = async (url, init) => {
     calls.push({ url, method: init?.method ?? 'GET' });
+    if (url.endsWith('/previews/pr-39') && init?.method === 'GET') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          result: { id: 'preview-uuid-39', name: 'pr-39', slug: 'pr-39' },
+        }),
+      };
+    }
+    if (url.includes('/previews/preview-uuid-39') && init?.method === 'DELETE') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, result: null }),
+      };
+    }
+    throw new Error(`fetch inesperado: ${init?.method} ${url}`);
+  };
+  const outcome = await deleteWorkerPreviewByName({
+    accountId: 'acc',
+    token: 'tok',
+    workerName: 'influ-poc-orchestrator',
+    previewName: 'pr-39',
+    fetchFn,
+  });
+  assert.equal(outcome.status, 'deleted');
+  assert.equal(outcome.previewId, 'preview-uuid-39');
+  assert.equal(calls.some((call) => call.url.endsWith('/previews/pr-39')), true);
+  assert.equal(calls.at(-1)?.method, 'DELETE');
+});
+
+test('deleteWorkerPreviewByName cae al listado si GET por nombre no encuentra', async () => {
+  const fetchFn = async (url, init) => {
+    if (url.endsWith('/previews/pr-39') && init?.method === 'GET') {
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({
+          success: false,
+          errors: [{ code: 10025, message: 'Preview not found' }],
+        }),
+      };
+    }
     if (url.endsWith('/previews') && init?.method === 'GET') {
       return {
         ok: true,
@@ -59,17 +110,29 @@ test('deleteWorkerPreviewByName lista, resuelve id y borra', async () => {
     fetchFn,
   });
   assert.equal(outcome.status, 'deleted');
-  assert.equal(outcome.previewId, 'preview-uuid-39');
-  assert.equal(calls.at(-1)?.method, 'DELETE');
-  assert.match(calls.at(-1)?.url, /previews\/preview-uuid-39$/);
 });
 
 test('deleteWorkerPreviewByName termina absent si no hay coincidencia', async () => {
-  const fetchFn = async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ success: true, result: [] }),
-  });
+  const fetchFn = async (url, init) => {
+    if (url.endsWith('/previews/pr-99') && init?.method === 'GET') {
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({
+          success: false,
+          errors: [{ code: 10025, message: 'Preview not found' }],
+        }),
+      };
+    }
+    if (url.endsWith('/previews') && init?.method === 'GET') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, result: [] }),
+      };
+    }
+    throw new Error(`fetch inesperado: ${init?.method} ${url}`);
+  };
   const outcome = await deleteWorkerPreviewByName({
     accountId: 'acc',
     token: 'tok',
@@ -98,6 +161,6 @@ test('deleteWorkerPreviewByName propaga errores distintos de preview ausente', a
         previewName: 'pr-39',
         fetchFn,
       }),
-    /No access/
+    /cloudflare_api_error/
   );
 });
