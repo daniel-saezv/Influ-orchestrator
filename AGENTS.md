@@ -46,6 +46,9 @@ La aceptación remota (`--target remote`), `node n8n/verify-sign-nodes.mjs` y `n
 
 ## Buenas prácticas
 
+- Sin comentarios en el código.
+- Sin ficheros `.md` largos de planes o decisiones; excepción: README de una capa concreta del repositorio.
+- Tests: antes de añadir uno, comprobar si ya lo cubre un test existente (ampliarlo); eliminar los que dejen de aplicar.
 - El núcleo no elige red social ni almacenamiento. Un publisher nuevo implementa el puerto `SocialPublisher` y se registra en `src/adapters/publishers/registry.js`. Guía: `docs/guia-nuevos-adaptadores.md`.
 - Fail-closed: el valor por defecto es MOCK. LIVE sigue deshabilitado en esta build aunque lleguen variables o un cuerpo HTTP. No pongas `PUBLISHER_MODE=live` en `wrangler.toml`. La guardia de salida, en MOCK, no permite hosts de publicación. El único `fetch` de aplicación es el webhook del encargo, y solo hacia el host de `INFLU_WEBHOOK_URL` cuando ese secreto y `INFLU_WEBHOOK_SECRET` existen.
 - Secretos HMAC (`BOT_HMAC_SECRET`, `APPROVER_HMAC_SECRET`), el bearer del MCP (`MCP_BEARER_TOKEN`), el AUD y el Client ID de la aplicación Access de `/mcp` (`ACCESS_MCP_AUD`, `MCP_SERVICE_TOKEN_CLIENT_ID`) y el webhook (`INFLU_WEBHOOK_URL`, `INFLU_WEBHOOK_SECRET`) solo con `wrangler secret put` o el panel. No van en git, en `wrangler.toml` ni en el workflow. `/mcp` exige las dos capas: el JWT de ese service token y el bearer. No hay Bypass. El CLI usa `INFLU_BOT_HMAC_SECRET`, `INFLU_APPROVER_HMAC_SECRET` e `INFLU_BASE_URL`. Con Access, también `INFLU_CF_ACCESS_CLIENT_ID` e `INFLU_CF_ACCESS_CLIENT_SECRET` (el token del CLI, distinto del de `/mcp`). Cómo conectar el MCP y la rutina, sin valores: `docs/mcp-grok.md`.
