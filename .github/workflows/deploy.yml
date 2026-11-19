@@ -12,7 +12,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: ${{ github.event_name == 'pull_request' && format('deploy-pr-{0}', github.event.pull_request.number) || format('deploy-{0}', github.ref) }}
   cancel-in-progress: true
 
 jobs:
@@ -239,12 +239,5 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set +e
-          npx wrangler preview delete --name "pr-${PR_NUMBER}" --skip-confirmation
-          code=$?
-          set -e
-          if [ "$code" -ne 0 ]; then
-            echo "La preview pr-${PR_NUMBER} no existía o ya fue borrada (código ${code})"
-          fi
+          PREVIEW_NAME: pr-${{ github.event.pull_request.number }}
+        run: node deploy/delete-worker-preview.mjs
