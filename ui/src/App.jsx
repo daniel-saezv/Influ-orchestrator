@@ -425,7 +425,7 @@ function FilePreview({ file }) {
   useEffect(() => () => url && URL.revokeObjectURL(url), [url])
   if (!file) return null
   if (url && file.type.startsWith('video/')) {
-    return <video className="thumb" src={url} playsInline muted />
+    return <video className="thumb" src={url} playsInline muted preload="metadata" />
   }
   if (url && file.type.startsWith('image/')) {
     return <img className="thumb" src={url} alt={`Vista previa de ${file.name}`} />
@@ -442,6 +442,18 @@ function PosterFrame({ note, version }) {
       <span className="poster-meta">Toma {version ?? 1} · 9:16</span>
     </div>
   )
+}
+
+function previewFromEncargo(data) {
+  const source = data?.preview
+  if (!source?.media_url) return null
+  const contentType = source.mime || source.content_type
+  if (!contentType) return null
+  return {
+    sha256: source.sha256 ?? data.result_sha256,
+    content_type: contentType,
+    url: source.media_url,
+  }
 }
 
 function previewMediaKind(contentType) {
@@ -726,6 +738,13 @@ function App({ api = realApi }) {
   }, [])
 
   const loadStreaks = useCallback(async (accounts) => {
+    if (accounts.length > 0 && accounts.every((item) => Number.isInteger(item.streak_days))) {
+      setStreaks((current) => ({
+        ...current,
+        ...Object.fromEntries(accounts.map((item) => [item.id, item.streak_days])),
+      }))
+      return
+    }
     const pairs = await Promise.all(accounts.map(async (item) => {
       const response = await api.getStreak(item.id)
       return [item.id, response.ok ? response.data.days : 0]
@@ -770,8 +789,8 @@ function App({ api = realApi }) {
     setChangeOpen(false)
     setUploading(false)
     if ((data.status === 'ready' || data.status === 'approved') && data.result_sha256) {
-      const media = await api.getMedia(data.result_sha256)
-      if (media.ok) setPreview(media.data)
+      const nextPreview = previewFromEncargo(data)
+      if (nextPreview) setPreview(nextPreview)
       else setPosterOnly(true)
     }
     const next = screenForStatus(data.status)
@@ -780,7 +799,7 @@ function App({ api = realApi }) {
     setScreen(next)
     window.scrollTo?.({ top: 0 })
     syncRoute(next, data.id, historyMode)
-  }, [api, syncRoute])
+  }, [syncRoute])
 
   const enter = useCallback(async (response) => {
     if (!response.ok) {
@@ -959,8 +978,6 @@ function App({ api = realApi }) {
     setAccountId(created.id)
     setStreaks((current) => ({ ...current, [created.id]: 0 }))
     notify(`Cuenta «${created.name}» lista`)
-    const refreshed = await api.getMe()
-    if (refreshed.ok) setMe(refreshed.data)
   }
 
   const fail = (message, back = 'studio') => {
@@ -1071,31 +1088,37 @@ function App({ api = realApi }) {
   useEffect(() => {
     if (screen !== 'preparing' || !encargoId || uploading) return undefined
     let stopped = false
+    let inflight = false
     const poll = async () => {
-      if (document.visibilityState !== 'visible' || stopped) return
-      const response = await api.getEncargo(encargoId)
-      if (!response.ok || stopped) return
-      setEncargo(response.data)
-      if (response.data.status === 'cancelled') {
-        go('cancelled', 'back')
-        return
-      }
-      if (response.data.status === 'scheduled') {
-        setResult(response.data)
-        const at = Date.parse(response.data.publish_at ?? '')
-        setScheduleMode(Number.isFinite(at) && at > Date.now() + 60_000 ? 'at' : 'now')
-        go('done')
-        return
-      }
-      if (response.data.status === 'failed') return
-      if (response.data.status === 'ready' || response.data.status === 'approved') {
-        const media = await api.getMedia(response.data.result_sha256)
-        if (stopped) return
-        if (media.ok) setPreview(media.data)
-        else setPosterOnly(true)
-        setArrive('ready')
-        celebrate()
-        go('preview')
+      if (document.visibilityState !== 'visible' || stopped || inflight) return
+      inflight = true
+      try {
+        const response = await api.getEncargo(encargoId)
+        if (!response.ok || stopped) return
+        setEncargo(response.data)
+        if (response.data.status === 'cancelled') {
+          go('cancelled', 'back')
+          return
+        }
+        if (response.data.status === 'scheduled') {
+          setResult(response.data)
+          const at = Date.parse(response.data.publish_at ?? '')
+          setScheduleMode(Number.isFinite(at) && at > Date.now() + 60_000 ? 'at' : 'now')
+          go('done')
+          return
+        }
+        if (response.data.status === 'failed') return
+        if (response.data.status === 'ready' || response.data.status === 'approved') {
+          const nextPreview = previewFromEncargo(response.data)
+          if (stopped) return
+          if (nextPreview) setPreview(nextPreview)
+          else setPosterOnly(true)
+          setArrive('ready')
+          celebrate()
+          go('preview')
+        }
+      } finally {
+        inflight = false
       }
     }
     poll()
@@ -1151,8 +1174,12 @@ function App({ api = realApi }) {
     const receipt = { ...encargo, ...scheduled.data, id: encargo.id, platforms: scheduled.data.platforms ?? encargo.platforms }
     setResult(receipt)
     setEncargo(receipt)
-    const nextStreak = await api.getStreak(account.id)
-    if (nextStreak.ok) setStreaks((current) => ({ ...current, [account.id]: nextStreak.data.days }))
+    if (Number.isInteger(scheduled.data.streak_days)) {
+      setStreaks((current) => ({ ...current, [account.id]: scheduled.data.streak_days }))
+    } else {
+      const nextStreak = await api.getStreak(account.id)
+      if (nextStreak.ok) setStreaks((current) => ({ ...current, [account.id]: nextStreak.data.days }))
+    }
     setBusy('')
     go('done')
   }

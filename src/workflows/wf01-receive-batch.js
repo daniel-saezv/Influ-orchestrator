@@ -11,12 +11,12 @@ export async function receiveBatch(input, ctx, { mode = 'create', note } = {}) {
   const batch = validateBatchInput(input);
   // 1) Archivos: deben existir en el almacenamiento y coincidir con lo declarado.
   const fileErrors = [];
-  const seen = new Map();
+  const uniqueShas = [...new Set(batch.publications.map((p) => p.media.sha256))];
+  const heads = await Promise.all(uniqueShas.map((sha) => ctx.media.head(sha)));
+  const seen = new Map(uniqueShas.map((sha, index) => [sha, heads[index]]));
   for (const p of batch.publications) {
-    const sha = p.media.sha256;
-    if (!seen.has(sha)) seen.set(sha, await ctx.media.head(sha));
-    const h = seen.get(sha);
-    if (!h) fileErrors.push({ field: `P${p.seq}.media`, message: `Archivo no encontrado en el almacenamiento: ${p.media.filename} (${sha.slice(0, 12)}…)` });
+    const h = seen.get(p.media.sha256);
+    if (!h) fileErrors.push({ field: `P${p.seq}.media`, message: `Archivo no encontrado en el almacenamiento: ${p.media.filename} (${p.media.sha256.slice(0, 12)}…)` });
     else {
       if (h.size_bytes !== p.media.size_bytes) fileErrors.push({ field: `P${p.seq}.media.size_bytes`, message: `Tamaño declarado ${p.media.size_bytes} != almacenado ${h.size_bytes}` });
       if (h.mime !== p.media.mime) fileErrors.push({ field: `P${p.seq}.media.mime`, message: `MIME declarado ${p.media.mime} != almacenado ${h.mime}` });
@@ -41,13 +41,12 @@ export async function receiveBatch(input, ctx, { mode = 'create', note } = {}) {
   }
 
   // 3) Validación específica de cada plataforma mediante su adaptador (sin red).
-  const validation = [];
-  for (const p of batch.publications) {
+  const validation = await Promise.all(batch.publications.map(async (p) => {
     const post = toNormalizedPost(batch, version, hash, p);
     const adapter = ctx.registry.forPlatform(p.platform);
     const r = await adapter.validatePost(post);
-    validation.push({ seq: p.seq, publication_id: post.publication_id, platform: p.platform, ok: r.ok, errors: r.errors ?? [], warnings: r.warnings ?? [], adapter: adapter.info.implementation });
-  }
+    return { seq: p.seq, publication_id: post.publication_id, platform: p.platform, ok: r.ok, errors: r.errors ?? [], warnings: r.warnings ?? [], adapter: adapter.info.implementation };
+  }));
   const allOk = validation.every((v) => v.ok);
   const status = allOk ? BS.READY_FOR_REVIEW : BS.DRAFT;
   const okBySeq = new Map(validation.map((v) => [v.seq, v.ok]));

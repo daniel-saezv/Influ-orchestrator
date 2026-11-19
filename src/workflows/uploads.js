@@ -67,8 +67,10 @@ export async function createUpload(repo, { email, body, now, r2 }) {
   if (body.sha256 !== undefined && body.sha256 !== null) fileSha = assertSha256(body.sha256, 'sha256');
   const count = partCountFor(size);
   const since = windowStart(now);
-  const userOps = await repo.classUsed(user.user_id, 'a', since);
-  const globalOps = await repo.classUsed('global', 'a', since);
+  const [userOps, globalOps] = await Promise.all([
+    repo.classUsed(user.user_id, 'a', since),
+    repo.classUsed('global', 'a', since),
+  ]);
   if (userOps + count > MAX_CLASS_A_USER || globalOps + count > MAX_CLASS_A_GLOBAL) {
     throw err('QUOTA_EXCEEDED', 'No cabe en el tope de escrituras', 413);
   }
@@ -204,13 +206,31 @@ export async function completeUpload(repo, { email, uploadId, body, now }) {
   };
 }
 
-export async function getMediaResponse(ctx, { email, sha256, now }) {
+const MEDIA_CACHE = 'private, max-age=31536000, immutable';
+
+function mediaEtag(hash) {
+  return `"${hash}"`;
+}
+
+function etagMatches(header, etag) {
+  if (!header) return false;
+  return header.split(',').some((part) => {
+    const value = part.trim();
+    return value === etag || value === `W/${etag}`;
+  });
+}
+
+export async function getMediaResponse(ctx, { email, sha256, now, request }) {
   const hash = /^[a-f0-9]{64}$/.test(sha256 ?? '') ? sha256 : null;
   if (!hash) throw NOT_FOUND();
   const user = await ctx.repo.userByEmail(email);
   if (!user) throw NOT_FOUND();
   const asset = await ctx.repo.mediaForEmail(email, hash);
   if (!asset || asset.delete_pending) throw NOT_FOUND();
+  const etag = mediaEtag(hash);
+  if (etagMatches(request?.headers?.get?.('if-none-match'), etag)) {
+    return new Response(null, { status: 304, headers: { etag, 'cache-control': MEDIA_CACHE, 'x-influ-mode': 'mock' } });
+  }
   if (!ctx.r2) throw err('R2_UNAVAILABLE', 'El almacenamiento no está disponible', 503);
   const reserved = await ctx.repo.reserveDaily(user.user_id, 'b', now, MAX_CLASS_B_USER, MAX_CLASS_B_GLOBAL);
   if (!reserved) throw err('QUOTA_EXCEEDED', 'Tope de lecturas alcanzado', 413);
@@ -230,7 +250,8 @@ export async function getMediaResponse(ctx, { email, sha256, now }) {
       'content-type': asset.mime || object.mime || 'application/octet-stream',
       'content-length': String(object.size),
       'x-content-sha256': object.sha256 || asset.sha256,
-      'cache-control': 'private, no-store',
+      etag,
+      'cache-control': MEDIA_CACHE,
       'x-influ-mode': 'mock',
     },
   });
