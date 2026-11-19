@@ -44,7 +44,6 @@ function serviceJwt(overrides = {}) {
   return signer.sign({
     aud: MCP_AUD,
     exp: now + 3600,
-    nbf: now - 30,
     iss: 'https://team.example.com',
     common_name: MCP_CLIENT_ID,
     sub: '',

@@ -128,7 +128,6 @@ test('verifyMcpServiceToken exige aud propio, common_name e iss y no el correo',
   const claims = {
     aud: 'aud-mcp',
     exp: Math.floor(now / 1000) + 60,
-    nbf: Math.floor(now / 1000) - 10,
     iss: 'https://team.example.com',
     common_name: 'conector.access',
     sub: '',
@@ -140,6 +139,25 @@ test('verifyMcpServiceToken exige aud propio, common_name e iss y no el correo',
   );
   assert.equal(ok.common_name, 'conector.access');
   assert.equal(ok.email, undefined);
+
+  const futureNbf = signJwtRs256({
+    ...claims,
+    nbf: Math.floor(now / 1000) + 30,
+  }, privateKey);
+  await assert.rejects(
+    () => verifyMcpServiceToken(new Request('https://x/mcp', { headers: { 'cf-access-jwt-assertion': futureNbf } }), env, deps),
+    (e) => e.code === 'UNAUTHENTICATED' && e.http === 401,
+  );
+  const noExp = signJwtRs256({ ...claims, exp: undefined }, privateKey);
+  await assert.rejects(
+    () => verifyMcpServiceToken(new Request('https://x/mcp', { headers: { 'cf-access-jwt-assertion': noExp } }), env, deps),
+    (e) => e.code === 'UNAUTHENTICATED' && e.http === 401,
+  );
+  const noIss = signJwtRs256({ ...claims, iss: undefined }, privateKey);
+  await assert.rejects(
+    () => verifyMcpServiceToken(new Request('https://x/mcp', { headers: { 'cf-access-jwt-assertion': noIss } }), env, deps),
+    (e) => e.code === 'UNAUTHENTICATED' && e.http === 401,
+  );
 
   const person = signJwtRs256({ ...claims, aud: 'aud-ui', email: 'ana@example.com', common_name: undefined }, privateKey);
   await assert.rejects(
