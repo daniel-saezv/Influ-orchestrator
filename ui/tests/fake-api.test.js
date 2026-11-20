@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fakeApi, {
+  markEncargoFailedForTests,
   FAKE_ACCESS_EMAIL,
   MAX_FILE_BYTES,
   MAX_GLOBAL_BYTES,
@@ -194,6 +195,32 @@ describe('fake Phase B API', () => {
     })
     await fakeApi.cancelEncargo(created.data.id)
     expect((await fakeApi.createUpload({ size: MAX_FILE_BYTES })).ok).toBe(true)
+  })
+
+  it('retries only a failed encargo that still has its source', async () => {
+    const account = await firstAccount()
+    const created = await fakeApi.createEncargo({
+      account_id: account.id,
+      kind: 'from_scratch',
+      note: 'Rehacer',
+      format: 'short_video',
+      targets: [{ platform: 'youtube', target: 'short' }],
+    })
+    expect((await fakeApi.retryEncargo(created.data.id)).status).toBe(409)
+    markEncargoFailedForTests(created.data.id)
+    const retried = await fakeApi.retryEncargo(created.data.id)
+    expect(retried.data.status).toBe('queued')
+    expect((await fakeApi.retryEncargo('enc-other')).status).toBe(404)
+  })
+
+  it('releases a completed upload back into the byte budget', async () => {
+    const upload = await fakeApi.createUpload({ size: MIB })
+    await fakeApi.uploadPart(upload.data.id, 1, { size: MIB })
+    await fakeApi.completeUpload(upload.data.id)
+    const released = await fakeApi.releaseUpload(upload.data.id)
+    expect(released.data.released).toBe(true)
+    expect(getFakeApiState().reservedBytes).toBe(0)
+    expect((await fakeApi.releaseUpload(upload.data.id)).status).toBe(404)
   })
 
   it('resumes a session from only its persisted upload id', async () => {

@@ -133,6 +133,10 @@ Cada ítem lleva `preview` solo si existe una pieza entregable de la versión ac
 
 `POST /v1/me/encargos` exige `format` (`image`, `carousel`, `short_video` o `video`) y `targets` (un `{ platform, target }` por red, solo combinaciones compatibles). `platforms` lo calcula el servidor. Un encargo de antes de la migración 0008 se lee con `format: null`, `targets: null` y `legacy: true`.
 
+`POST /v1/me/encargos/:id/retry` reencola el mismo encargo, de `failed` a `queued`, con la misma cuenta, nota, formato, destinos y archivos de origen. No crea objetos en R2 ni devuelve URLs. Solo el dueño: otro correo es 404. Si el estado no es `failed`, 409 `CONFLICT`. Si hay origen, el Worker hace `head` de cada parte (clase B) y exige que el SHA-256 y el tamaño coincidan con D1; si no, el encargo sigue en `failed` y la respuesta es 409 `INTEGRITY_PART_MISMATCH`. Una edición sin partes de origen es 409. Un encargo desde cero, sin archivos, se reencola igual. La respuesta 200 es el encargo público con `status: queued` y `kind`, y vuelve a disparar el webhook de la rutina. El bot no cambia: al reclamar, `origin` trae esos mismos assets.
+
+`POST /v1/me/uploads/:id/release` lo usa la persona para quitar una subida propia mientras el encargo sigue en `draft` o `queued`. Borra las partes en R2, las filas de origen de esa sesión y la sesión, y suelta los bytes. Si no queda origen, el encargo vuelve a `draft`. Otro correo es 404. Un encargo ya reclamado, fallido o posterior es 409. No devuelve URLs.
+
 `status` es el de D1 (`draft`, `queued`, `claimed`, `ready`, `approved`, `scheduled`, `cancelled`, `failed`). La UI agrupa ese listado en el teléfono, sin un filtro en el servidor: en curso (`draft`, `queued`, `claimed`, `preparing`, `failed`), listo (`ready`, `approved`), programado (`scheduled` con `publish_at` más de un minuto en el futuro), publicado (`scheduled` sin esa fecha futura) y cancelado (`cancelled`). Otro correo recibe una lista vacía, no los ajenos. Un service token responde 403 `ACCESS_DENIED`.
 
 ## API del bot (encargos)

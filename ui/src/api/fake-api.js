@@ -484,6 +484,39 @@ async function completeUpload(uploadId, input = {}) {
   return success({ id: upload.id, sha256: upload.sha256, size: upload.size, complete: true })
 }
 
+async function retryEncargo(encargoId) {
+  await sleep()
+  const encargo = requireEncargo(encargoId)
+  if (!encargo) return missing()
+  if (encargo.status !== 'failed') return failure(409, 'CONFLICT', 'Solo se puede reintentar un encargo fallido.')
+  if (encargo.kind === 'edit') {
+    const upload = encargo.source_sha256 ? state.uploadHashes.get(encargo.source_sha256) : null
+    if (!upload || upload.released || upload.user_id !== currentUser().id) {
+      return failure(409, 'CONFLICT', 'No quedan archivos de origen para reintentar.')
+    }
+  }
+  encargo.status = 'queued'
+  encargo.reads = 0
+  encargo.approved = false
+  touch(encargo)
+  return success(publicEncargo(encargo))
+}
+
+async function releaseUpload(uploadId) {
+  await sleep()
+  const upload = requireUpload(uploadId)
+  if (!upload || upload.released) return missing()
+  upload.released = true
+  state.reservedBytes = Math.max(0, state.reservedBytes - upload.size)
+  if (upload.sha256) state.uploadHashes.delete(upload.sha256)
+  return success({ upload_id: upload.id, released: true })
+}
+
+export function markEncargoFailedForTests(encargoId) {
+  const encargo = state.encargos.get(String(encargoId))
+  if (encargo) encargo.status = 'failed'
+}
+
 async function getEncargo(encargoId) {
   await sleep()
   const encargo = requireEncargo(encargoId)
@@ -676,6 +709,8 @@ export const routes = {
   'POST /v1/me/uploads': (body) => createUpload(body),
   'PUT /v1/me/uploads/:id/parts/:n': (body, params) => uploadPart(params.id, params.n, body),
   'POST /v1/me/uploads/:id/complete': (body, params) => completeUpload(params.id, body),
+  'POST /v1/me/uploads/:id/release': (_body, params) => releaseUpload(params.id),
+  'POST /v1/me/encargos/:id/retry': (_body, params) => retryEncargo(params.id),
   'GET /v1/me/encargos/:id': (_body, params) => getEncargo(params.id),
   'GET /v1/me/media/:sha256': (_body, params) => getMedia(params.sha256),
   'POST /v1/me/encargos/:id/decision': (body, params) => decideEncargo(params.id, body),
@@ -738,6 +773,8 @@ export const fakeApi = {
   createUpload,
   uploadPart,
   completeUpload,
+  releaseUpload,
+  retryEncargo,
   getEncargo,
   getMedia,
   decideEncargo,
@@ -761,6 +798,8 @@ export {
   createUpload,
   uploadPart,
   completeUpload,
+  releaseUpload,
+  retryEncargo,
   getEncargo,
   getMedia,
   decideEncargo,

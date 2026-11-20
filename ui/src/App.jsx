@@ -29,7 +29,20 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react'
-import realApi, { sha256Hex } from './api/api.js'
+import realApi from './api/api.js'
+import { KeptFiles } from './components/kept-files.jsx'
+import { hashFile } from './lib/hash-file.js'
+import {
+  bindStudioEncargo,
+  clearStudioFiles,
+  currentStudioFiles,
+  markStudioUploaded,
+  noteStudioUpload,
+  removeStudioFile,
+  replaceStudioFiles,
+  useStudioFiles,
+} from './lib/studio-files.js'
+import { uploadParts } from './lib/upload-parts.js'
 import { Badge } from './components/ui/badge.jsx'
 import { Button } from './components/ui/button.jsx'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './components/ui/empty.jsx'
@@ -778,7 +791,7 @@ function App({ api = realApi }) {
   const [activity, setActivity] = useState(null)
   const [kind, setKind] = useState(() => readStudioDraft()?.kind ?? 'from_scratch')
   const [note, setNote] = useState(() => readStudioDraft()?.note ?? '')
-  const [files, setFiles] = useState([])
+  const files = useStudioFiles().files
   const [format, setFormat] = useState(() => readStudioDraft()?.format ?? '')
   const [targets, setTargets] = useState(() => readStudioDraft()?.targets ?? [])
   const [encargo, setEncargo] = useState(null)
@@ -818,6 +831,7 @@ function App({ api = realApi }) {
   const announcedReady = useRef(new Set())
   const encargoStatusRef = useRef(null)
   const fileInputRef = useRef(null)
+  const uploadAbortRef = useRef(null)
   const preparingLive = screen === 'preparing' && !uploading && encargo?.status !== 'failed' && encargo?.status !== 'draft'
   const beat = useBeat(
     encargo?.status === 'claimed' || encargo?.status === 'preparing' ? PREP_BEATS : QUEUE_BEATS,
@@ -1260,10 +1274,33 @@ function App({ api = realApi }) {
     setError(message)
   }
 
+  const releaseRemoved = (entries) => {
+    for (const entry of entries) {
+      if (entry.uploadId) api.releaseUpload?.(entry.uploadId)
+    }
+  }
+
+  const removeKeptFile = async (entry) => {
+    tap()
+    if (entry.uploadId && api.releaseUpload) {
+      const released = await api.releaseUpload(entry.uploadId)
+      if (!released.ok && released.status !== 404) {
+        setError(released.error?.message || 'No he podido quitar el archivo.')
+        return
+      }
+    }
+    removeStudioFile(entry.key)
+  }
+
   const createEncargo = async () => {
-    if (!account || account.pending) return
-    if (kind === 'edit' && files.some((file) => file.size > MAX_FILE_BYTES)) {
+    if (!account || account.pending || uploading) return
+    const selected = currentStudioFiles().files
+    if (kind === 'edit' && selected.some((entry) => entry.size > MAX_FILE_BYTES)) {
       setError('Ese archivo supera los 150 MB. Elige uno más pequeño.')
+      return
+    }
+    if (kind === 'edit' && selected.some((entry) => !entry.complete && !entry.file)) {
+      setError('Vuelve a elegir los archivos que faltan por subir.')
       return
     }
     tap()
@@ -1275,81 +1312,130 @@ function App({ api = realApi }) {
     encargoIdRef.current = null
     setEncargo(null)
     go('preparing')
-    const created = await api.createEncargo({
-      account_id: account.id,
-      kind,
-      note,
-      format,
-      targets: targets.map((id) => {
-        const [platform, target] = id.split(':')
-        return { platform, target }
-      }),
-    })
-    if (!created.ok) {
-      fail(created.error.message)
-      return
+    const boundId = currentStudioFiles().encargoId
+    let activeEncargo = null
+    if (kind === 'edit' && boundId) {
+      const existing = await api.getEncargo(boundId)
+      const reusable = existing.ok && existing.data.kind === 'edit' && (existing.data.status === 'draft' || existing.data.status === 'queued')
+      if (reusable) activeEncargo = existing.data
+      else if (existing.ok && selected.some((entry) => entry.complete && entry.encargoId === boundId)) {
+        fail('Ese encargo ya no admite más archivos. Ábrelo en Mis encargos.')
+        return
+      }
+    }
+    if (!activeEncargo) {
+      const created = await api.createEncargo({
+        account_id: account.id,
+        kind,
+        note,
+        format,
+        targets: targets.map((id) => {
+          const [platform, target] = id.split(':')
+          return { platform, target }
+        }),
+      })
+      if (!created.ok) {
+        fail(created.error.message)
+        return
+      }
+      activeEncargo = created.data
+      if (kind === 'edit') bindStudioEncargo(activeEncargo.id)
     }
     writeSession(DRAFT_KEY, null)
-    let activeEncargo = created.data
     setEncargo(activeEncargo)
     if (screenRef.current === 'encargos') loadEncargos()
     if (kind === 'edit') {
-      const totalParts = files.reduce((sum, file) => sum + Math.max(1, Math.ceil(file.size / PART_BYTES)), 0)
-      let sentParts = 0
-      for (const [fileIndex, source] of files.entries()) {
-        const interruptedId = fileIndex === 0 ? window.localStorage.getItem(UPLOAD_KEY) : null
-        const sourceSha256 = await sha256Hex(source)
-        const uploadBody = {
-          encargo_id: activeEncargo.id,
-          size_bytes: source.size,
-          mime: source.type || 'application/octet-stream',
-          sha256: sourceSha256,
-        }
-        let upload = await api.createUpload({ ...uploadBody, resume_id: interruptedId })
-        if (!upload.ok && interruptedId) {
-          window.localStorage.removeItem(UPLOAD_KEY)
-          upload = await api.createUpload(uploadBody)
-        }
-        if (!upload.ok) {
-          fail(upload.error.message)
-          return
-        }
-        if (upload.data.resumed && upload.data.encargo_id && upload.data.encargo_id !== activeEncargo.id) {
-          await api.cancelEncargo(activeEncargo.id)
-          const resumed = await api.getEncargo(upload.data.encargo_id)
-          if (!resumed.ok) {
-            fail(resumed.error.message)
+      const abort = new AbortController()
+      uploadAbortRef.current = abort
+      try {
+        const pending = currentStudioFiles().files.filter((entry) => !(entry.complete && entry.sha256 && entry.encargoId === activeEncargo.id))
+        const totalParts = pending.reduce((sum, entry) => sum + Math.max(1, Math.ceil(entry.size / PART_BYTES)), 0) || 1
+        let sentParts = 0
+        for (const [fileIndex, entry] of pending.entries()) {
+          if (abort.signal.aborted) return
+          const source = entry.file
+          const interruptedId = entry.uploadId ?? (fileIndex === 0 ? window.localStorage.getItem(UPLOAD_KEY) : null)
+          let hashed
+          try {
+            hashed = await hashFile(source, { partSize: PART_BYTES, signal: abort.signal })
+          } catch (error) {
+            if (abort.signal.aborted || error?.name === 'AbortError') return
+            fail('No se pudo leer el archivo.')
             return
           }
-          activeEncargo = resumed.data
-          setEncargo(activeEncargo)
-        }
-        const uploadSessionId = upload.data.upload_id
-        window.localStorage.setItem(UPLOAD_KEY, uploadSessionId)
-        const partCount = Math.ceil(source.size / PART_BYTES)
-        const uploadedParts = new Set(upload.data.uploaded_parts ?? [])
-        for (let index = 0; index < partCount; index += 1) {
-          if (!uploadedParts.has(index + 1)) {
-            const start = index * PART_BYTES
-            const part = source.slice(start, Math.min(start + PART_BYTES, source.size))
-            const uploaded = await api.uploadPart(uploadSessionId, index + 1, part)
-            if (!uploaded.ok) {
-              fail(uploaded.error.message)
+          const sourceSha256 = hashed.sha256
+          const uploadBody = {
+            encargo_id: activeEncargo.id,
+            size_bytes: source.size,
+            mime: source.type || 'application/octet-stream',
+            sha256: sourceSha256,
+          }
+          let upload = await api.createUpload({ ...uploadBody, resume_id: interruptedId })
+          if (abort.signal.aborted) return
+          if (!upload.ok && interruptedId) {
+            window.localStorage.removeItem(UPLOAD_KEY)
+            upload = await api.createUpload(uploadBody)
+          }
+          if (abort.signal.aborted) return
+          if (!upload.ok) {
+            fail(upload.error.message)
+            return
+          }
+          if (upload.data.resumed && upload.data.encargo_id && upload.data.encargo_id !== activeEncargo.id) {
+            await api.cancelEncargo(activeEncargo.id)
+            const resumed = await api.getEncargo(upload.data.encargo_id)
+            if (!resumed.ok) {
+              fail(resumed.error.message)
               return
             }
+            activeEncargo = resumed.data
+            bindStudioEncargo(activeEncargo.id)
+            setEncargo(activeEncargo)
           }
-          sentParts += 1
-          setUploadProgress(Math.round((sentParts / totalParts) * 100))
+          if (abort.signal.aborted) return
+          const uploadSessionId = upload.data.upload_id
+          noteStudioUpload(entry.key, { uploadId: uploadSessionId, encargoId: activeEncargo.id })
+          window.localStorage.setItem(UPLOAD_KEY, uploadSessionId)
+          const partSize = upload.data.part_size || PART_BYTES
+          let uploaded
+          try {
+            uploaded = await uploadParts({
+              source,
+              partSize,
+              partHashes: partSize === PART_BYTES ? hashed.partHashes : null,
+              uploadedParts: new Set(upload.data.uploaded_parts ?? []),
+              signal: abort.signal,
+              uploadPart: (number, blob, sha256, options) => api.uploadPart(uploadSessionId, number, blob, sha256, options),
+              onPartDone: () => {
+                sentParts += 1
+                setUploadProgress(Math.round((sentParts / totalParts) * 100))
+              },
+            })
+          } catch (error) {
+            if (abort.signal.aborted || error?.name === 'AbortError') return
+            fail('No se pudo subir el archivo.')
+            return
+          }
+          if (abort.signal.aborted) return
+          if (!uploaded.ok) {
+            fail(uploaded.error.message)
+            return
+          }
+          const completed = await api.completeUpload(uploadSessionId, { sha256: sourceSha256 })
+          if (abort.signal.aborted) return
+          if (!completed.ok) {
+            fail(completed.error.message)
+            return
+          }
+          markStudioUploaded(entry.key, { sha256: sourceSha256, uploadId: uploadSessionId, encargoId: activeEncargo.id })
+          window.localStorage.removeItem(UPLOAD_KEY)
         }
-        const completed = await api.completeUpload(uploadSessionId, { sha256: sourceSha256 })
-        if (!completed.ok) {
-          fail(completed.error.message)
-          return
-        }
-        window.localStorage.removeItem(UPLOAD_KEY)
+        clearStudioFiles()
+        setUploading(false)
+        if (screenRef.current === 'encargos') loadEncargos()
+      } finally {
+        if (uploadAbortRef.current === abort) uploadAbortRef.current = null
       }
-      setUploading(false)
-      if (screenRef.current === 'encargos') loadEncargos()
     }
   }
 
@@ -1463,11 +1549,24 @@ function App({ api = realApi }) {
     go('done')
   }
 
-  const cancelActiveEncargo = async () => {
+  const retryFailed = async () => {
     if (!encargo?.id || busy) return
     tap()
+    const retried = await run('retry', () => api.retryEncargo(encargo.id))
+    if (!retried) return
+    setEncargo({ ...encargo, ...retried, id: retried.id ?? encargo.id, status: 'queued' })
+    setError('')
+  }
+
+  const cancelActiveEncargo = async () => {
+    if (!encargo?.id || busy) return
+    uploadAbortRef.current?.abort()
+    tap()
     const cancelled = await run('cancel', () => api.cancelEncargo(encargo.id))
-    if (!cancelled) return
+    if (!cancelled) {
+      setUploading(false)
+      return
+    }
     setEncargo({ ...encargo, ...cancelled, id: cancelled.id ?? encargo.id })
     setApproved(false)
     setPreview(null)
@@ -1556,9 +1655,9 @@ function App({ api = realApi }) {
 
   const startOver = (target = 'studio') => {
     writeSession(DRAFT_KEY, null)
+    clearStudioFiles()
     setKind('from_scratch')
     setNote('')
-    setFiles([])
     setFormat('')
     setTargets([])
     setEncargo(null)
@@ -1672,28 +1771,15 @@ function App({ api = realApi }) {
                   event.target.value = ''
                   if (chosen.some((file) => file.size > MAX_FILE_BYTES)) {
                     setError('Ese archivo supera los 150 MB. Elige uno más pequeño.')
-                    setFiles([])
+                    releaseRemoved(replaceStudioFiles([]))
                     return
                   }
                   setError('')
-                  setFiles(chosen)
+                  releaseRemoved(replaceStudioFiles(chosen))
                   tap()
                 }} />
               </label>
-              {files.length > 0 && (
-                <div className="thumbs">
-                  {files.map((file) => (
-                    <div className="thumb-wrap" key={`${file.name}-${file.size}-${file.lastModified}`}>
-                      <FilePreview file={file} />
-                      <button type="button" className="thumb-remove" aria-label={`Quitar ${file.name}`} onClick={() => {
-                        tap()
-                        setFiles((current) => current.filter((item) => item !== file))
-                        if (fileInputRef.current) fileInputRef.current.value = ''
-                      }}><X aria-hidden="true" /></button>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <KeptFiles files={files} onRemove={removeKeptFile} renderPreview={(file) => <FilePreview file={file} />} />
               {window.localStorage.getItem(UPLOAD_KEY) && <p className="fine">Hay una subida a medias. Elige exactamente los mismos archivos para continuar.</p>}
               <Field>
                 <FieldLabel htmlFor="note">Indicaciones</FieldLabel>
@@ -1729,7 +1815,7 @@ function App({ api = realApi }) {
     const hint = uploading
       ? 'No cierres la app hasta que termine la subida.'
       : failed
-        ? 'No he podido terminarlo. Puedes cerrar la app; el estado sigue aquí cuando vuelvas.'
+        ? 'Los archivos siguen guardados. Reintentar no vuelve a subirlos.'
         : draft
           ? 'La subida no terminó. Vuelve al inicio y elige los mismos archivos para continuarla.'
           : 'Puedes cerrar la app; aquí verás el estado de tu encargo cuando vuelvas.'
@@ -1792,6 +1878,11 @@ function App({ api = realApi }) {
     )
     cta = (
       <div className="cta-stack">
+        {failed && (
+          <Button size="lg" className="cta" onClick={retryFailed} disabled={Boolean(busy)}>
+            <CtaLabel icon={RotateCcw} busy={busy === 'retry'}>Reintentar</CtaLabel>
+          </Button>
+        )}
         <Button size="lg" variant="outline" className="cta-secondary" onClick={() => go('studio', 'back')}>Inicio</Button>
         <CancelEncargoAction encargo={encargo} busy={busy} onConfirm={cancelActiveEncargo} />
       </div>

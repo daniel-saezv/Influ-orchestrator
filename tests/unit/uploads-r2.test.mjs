@@ -313,6 +313,60 @@ test('cambios borra entregables de esta versión y de la anterior; el origen sig
   assert.deepEqual(new Uint8Array(await again.arrayBuffer()), origin);
 });
 
+test('soltar la subida devuelve los bytes y no toca un encargo ya reclamado', async () => {
+  const h = harness();
+  const { email, encargoId } = await draft(h);
+  const bytes = new Uint8Array([5, 5, 5, 5]);
+  const digest = shaHex(bytes);
+  const opened = await h.read(await h.call('POST', '/v1/me/uploads', email, {
+    json: { encargo_id: encargoId, size_bytes: bytes.length, mime: 'video/mp4', sha256: digest },
+  }));
+  await h.read(await h.call('PUT', `/v1/me/uploads/${opened.data.upload_id}/parts/1`, email, {
+    raw: bytes, headers: { 'content-type': 'video/mp4', 'x-content-sha256': digest },
+  }));
+  const user = await h.repo.userByEmail(email);
+  assert.equal(await h.repo.storedBytes(user.user_id), bytes.length);
+  const early = await h.read(await h.call('POST', `/v1/me/uploads/${opened.data.upload_id}/release`, email));
+  assert.equal(early.status, 200, JSON.stringify(early.error));
+  assert.equal(early.data.status, 'draft');
+  assert.equal(await h.repo.storedBytes(user.user_id), 0);
+  assert.equal(h.r2.objects.size, 0);
+  const gone = await h.read(await h.call('POST', `/v1/me/uploads/${opened.data.upload_id}/release`, email));
+  assert.equal(gone.status, 404);
+
+  const again = await h.read(await h.call('POST', '/v1/me/uploads', email, {
+    json: { encargo_id: encargoId, size_bytes: bytes.length, mime: 'video/mp4', sha256: digest },
+  }));
+  await h.read(await h.call('PUT', `/v1/me/uploads/${again.data.upload_id}/parts/1`, email, {
+    raw: bytes, headers: { 'content-type': 'video/mp4', 'x-content-sha256': digest },
+  }));
+  const done = await h.read(await h.call('POST', `/v1/me/uploads/${again.data.upload_id}/complete`, email, { json: { sha256: digest } }));
+  assert.equal(done.data.status, 'queued');
+  const second = new Uint8Array([6, 6, 6, 6, 6]);
+  const secondDigest = shaHex(second);
+  const extra = await h.read(await h.call('POST', '/v1/me/uploads', email, {
+    json: { encargo_id: encargoId, size_bytes: second.length, mime: 'video/mp4', sha256: secondDigest },
+  }));
+  await h.read(await h.call('PUT', `/v1/me/uploads/${extra.data.upload_id}/parts/1`, email, {
+    raw: second, headers: { 'content-type': 'video/mp4', 'x-content-sha256': secondDigest },
+  }));
+  await h.read(await h.call('POST', `/v1/me/uploads/${extra.data.upload_id}/complete`, email, { json: { sha256: secondDigest } }));
+  const foreign = await h.read(await h.call('POST', `/v1/me/uploads/${extra.data.upload_id}/release`, 'otro@example.com'));
+  assert.equal(foreign.status, 404);
+  const dropped = await h.read(await h.call('POST', `/v1/me/uploads/${extra.data.upload_id}/release`, email));
+  assert.equal(dropped.status, 200, JSON.stringify(dropped.error));
+  assert.equal(dropped.data.status, 'queued');
+  assert.equal(await h.repo.storedBytes(user.user_id), bytes.length);
+  assert.equal(h.shim._raw.prepare(`SELECT COUNT(*) AS n FROM encargo_assets WHERE encargo_id = ? AND delete_pending = 0`).get(encargoId).n, 1);
+  assert.equal(await h.repo.sourceFileSha(encargoId), digest);
+
+  await h.repo.claimEncargo(encargoId, new Date().toISOString());
+  const blocked = await h.read(await h.call('POST', `/v1/me/uploads/${again.data.upload_id}/release`, email));
+  assert.equal(blocked.status, 409);
+  assert.equal(await h.repo.storedBytes(user.user_id), bytes.length);
+  assert.equal(JSON.stringify(dropped.data).includes('http'), false);
+});
+
 test('cancelar deja a cero los bytes del encargo y no baja la ventana de clase A', async () => {
   const h = harness();
   const { email, encargoId } = await draft(h);
@@ -426,4 +480,53 @@ test('la clase B de hace 31 días no bloquea la lectura y la de hoy sí', async 
   h.shim._raw.prepare('INSERT INTO r2_daily (scope, day, class_a, class_b, bytes_peak) VALUES (?, ?, 0, 100000, 0)').run(user.user_id, shiftUtcDay(DAY, -31));
   const open = await h.call('GET', `/v1/me/media/${digest}`, email);
   assert.equal(open.status, 200);
+});
+
+test('recordPart en paralelo conserva cada parte', async () => {
+  const h = harness();
+  const { email, encargoId } = await draft(h);
+  const opened = await h.read(await h.call('POST', '/v1/me/uploads', email, {
+    json: { encargo_id: encargoId, size_bytes: PART_SIZE_BYTES * 4, mime: 'video/mp4' },
+  }));
+  const now = new Date().toISOString();
+  const info = (n) => ({ sha256: String(n).padStart(64, 'a'), size: PART_SIZE_BYTES, key: `pending/${n}` });
+  const results = await Promise.all([1, 2, 3, 4].map((n) => h.repo.recordPart(opened.data.upload_id, n, info(n), now)));
+  assert.deepEqual(results, ['saved', 'saved', 'saved', 'saved']);
+  const row = h.shim._raw.prepare('SELECT part_hashes_json, received_parts FROM upload_sessions WHERE upload_id = ?').get(opened.data.upload_id);
+  const parts = JSON.parse(row.part_hashes_json);
+  assert.equal(row.received_parts, 4);
+  for (const n of [1, 2, 3, 4]) assert.equal(parts[String(n)].key, `pending/${n}`);
+});
+
+test('dos partes en paralelo gastan una clase A cada una y se completan en orden', async () => {
+  const h = harness();
+  const { email, encargoId } = await draft(h);
+  const head = new Uint8Array(PART_SIZE_BYTES);
+  head.fill(7);
+  const tail = new Uint8Array([9, 8, 7, 6]);
+  const headSha = shaHex(head);
+  const tailSha = shaHex(tail);
+  const fileSha = shaHex(Buffer.concat([head, tail]));
+  const opened = await h.read(await h.call('POST', '/v1/me/uploads', email, {
+    json: { encargo_id: encargoId, size_bytes: head.length + tail.length, mime: 'video/mp4', sha256: fileSha },
+  }));
+  const put = (part, raw, sha) => h.call('PUT', `/v1/me/uploads/${opened.data.upload_id}/parts/${part}`, email, {
+    raw, headers: { 'content-type': 'video/mp4', 'x-content-sha256': sha },
+  }).then((res) => h.read(res));
+  const [first, second] = await Promise.all([put(1, head, headSha), put(2, tail, tailSha)]);
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(h.r2.puts, 2);
+  const user = await h.repo.userByEmail(email);
+  const ops = h.shim._raw.prepare('SELECT class_a FROM r2_daily WHERE scope = ? AND day = ?').get(user.user_id, DAY);
+  const global = h.shim._raw.prepare("SELECT class_a FROM r2_daily WHERE scope = 'global' AND day = ?").get(DAY);
+  assert.equal(ops.class_a, 2);
+  assert.equal(global.class_a, 2);
+  const done = await h.read(await h.call('POST', `/v1/me/uploads/${opened.data.upload_id}/complete`, email, {
+    json: { sha256: fileSha },
+  }));
+  assert.equal(done.status, 200);
+  assert.equal(done.data.complete, true);
+  const assets = h.shim._raw.prepare(`SELECT sha256 FROM encargo_assets WHERE encargo_id = ? AND role = 'source' ORDER BY r2_key`).all(encargoId);
+  assert.deepEqual(assets.map((row) => row.sha256), [headSha, tailSha]);
 });

@@ -356,6 +356,13 @@ export class D1Repository {
     return r.meta.changes === 1;
   }
 
+  async requeueFailedEncargo(encargoId, now) {
+    const r = await this.db.prepare(`UPDATE encargos
+      SET status = 'queued', content_hash = NULL, synthetic = NULL, batch_id = NULL, publish_at = NULL, delivered = 0, updated_at = ?
+      WHERE encargo_id = ? AND status = 'failed'`).bind(now, encargoId).run();
+    return r.meta.changes === 1;
+  }
+
   async claimEncargo(encargoId, now) {
     const r = await this.db.prepare(`UPDATE encargos SET status = 'claimed', updated_at = ? WHERE encargo_id = ? AND status = 'queued'`).bind(now, encargoId).run();
     return r.meta.changes === 1;
@@ -742,15 +749,19 @@ export class D1Repository {
   }
 
   async recordPart(uploadId, part, info, now) {
-    const row = await this.db.prepare('SELECT part_hashes_json FROM upload_sessions WHERE upload_id = ?').bind(uploadId).first();
-    const parts = JSON.parse(row?.part_hashes_json || '{}');
     const key = String(part);
-    if (parts[key]) return parts[key].sha256 === info.sha256 ? 'same' : 'conflict';
-    parts[key] = info;
-    const received = Object.keys(parts).length;
-    const res = await this.db.prepare(`UPDATE upload_sessions SET part_hashes_json = ?, received_parts = ?, updated_at = ? WHERE upload_id = ? AND part_hashes_json = ?`)
-      .bind(JSON.stringify(parts), received, now, uploadId, row.part_hashes_json).run();
-    return res.meta.changes === 1 ? 'saved' : 'retry';
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const row = await this.db.prepare('SELECT part_hashes_json FROM upload_sessions WHERE upload_id = ?').bind(uploadId).first();
+      if (!row) return 'conflict';
+      const parts = JSON.parse(row.part_hashes_json || '{}');
+      if (parts[key]) return parts[key].sha256 === info.sha256 ? 'same' : 'conflict';
+      parts[key] = info;
+      const received = Object.keys(parts).length;
+      const res = await this.db.prepare(`UPDATE upload_sessions SET part_hashes_json = ?, received_parts = ?, updated_at = ? WHERE upload_id = ? AND part_hashes_json = ?`)
+        .bind(JSON.stringify(parts), received, now, uploadId, row.part_hashes_json).run();
+      if (res.meta.changes === 1) return 'saved';
+    }
+    return 'retry';
   }
 
   async markUploadComplete({ uploadId, fileSha, now }) {
@@ -767,6 +778,20 @@ export class D1Repository {
       VALUES (?, ?, 'source', ?, ?, ?, ?, 1, ?)`).bind(crypto.randomUUID(), encargoId, part.key, part.sha256, mime, part.size, now));
     stmts.push(this.db.prepare(`UPDATE encargos SET status = 'queued', updated_at = ? WHERE encargo_id = ? AND status = 'draft'`).bind(now, encargoId));
     await this.db.batch(stmts);
+  }
+
+  async deleteUploadSession(uploadId) {
+    const r = await this.db.prepare('DELETE FROM upload_sessions WHERE upload_id = ?').bind(uploadId).run();
+    return r.meta.changes === 1;
+  }
+
+  async markDraftIfNoSource(encargoId, now) {
+    const left = await this.db.prepare(`SELECT COUNT(*) AS n FROM encargo_assets
+      WHERE encargo_id = ? AND role = 'source' AND delete_pending = 0`).bind(encargoId).first();
+    if (Number(left?.n ?? 0) > 0) return false;
+    const r = await this.db.prepare(`UPDATE encargos SET status = 'draft', updated_at = ? WHERE encargo_id = ? AND status = 'queued'`)
+      .bind(now, encargoId).run();
+    return r.meta.changes === 1;
   }
 
   async listOrphanUploads(cutoff, limit) {

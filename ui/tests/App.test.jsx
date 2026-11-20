@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../src/App.jsx'
 import fakeApi, { configureFakeApi, getFakeApiState, resetFakeApi } from '../src/api/fakeApi.js'
+import { resetStudioFiles } from '../src/lib/studio-files.js'
 
 async function chooseFormat(user, label, targets) {
   await user.click(screen.getByRole('radio', { name: new RegExp(label) }))
@@ -15,6 +16,7 @@ describe('mobile creation flow', () => {
     configureFakeApi({ transitionReads: 0.5 })
     localStorage.clear()
     sessionStorage.clear()
+    resetStudioFiles()
     delete document.documentElement.dataset.theme
     window.history.replaceState({}, '', '/')
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
@@ -482,5 +484,88 @@ describe('mobile creation flow', () => {
     expect(await screen.findByText('«Alex principal» otra vez activa')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Estudio' }))
     expect(screen.getByRole('radio', { name: /Alex principal/ })).toBeInTheDocument()
+  })
+
+  it('keeps chosen files when leaving the form and lets you remove them', async () => {
+    resetFakeApi({ onboarded: true })
+    const user = userEvent.setup()
+    const view = render(<App api={fakeApi} />)
+    await user.click(await screen.findByRole('radio', { name: 'Mis archivos' }))
+    const file = new File(['crop'], 'original.mp4', { type: 'video/mp4' })
+    await user.upload(screen.getByLabelText(/Elegir vídeo, audio o fotos/), file)
+    expect(screen.getByRole('button', { name: 'Quitar original.mp4' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Encargos' }))
+    view.unmount()
+    render(<App api={fakeApi} />)
+    await user.click(await screen.findByRole('button', { name: 'Estudio' }))
+    await user.click(await screen.findByRole('radio', { name: 'Mis archivos' }))
+    expect(screen.getByRole('button', { name: 'Quitar original.mp4' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Quitar original.mp4' }))
+    expect(screen.queryByRole('button', { name: 'Quitar original.mp4' })).not.toBeInTheDocument()
+  })
+
+  it('reuses a finished upload instead of sending that file again', async () => {
+    resetFakeApi({ onboarded: true })
+    configureFakeApi({ transitionReads: 100 })
+    const user = userEvent.setup()
+    const sizes = []
+    let encargos = 0
+    const api = {
+      ...fakeApi,
+      createEncargo: async (body) => {
+        encargos += 1
+        return fakeApi.createEncargo(body)
+      },
+      createUpload: async (body) => {
+        sizes.push(body.size_bytes)
+        if (body.size_bytes === 6 && sizes.filter((size) => size === 6).length === 1) {
+          return { ok: false, status: 400, error: { code: 'UPLOAD', message: 'corte de subida' } }
+        }
+        return fakeApi.createUpload(body)
+      },
+    }
+    render(<App api={api} />)
+    await user.click(await screen.findByRole('radio', { name: 'Mis archivos' }))
+    const first = new File(['aaaa'], 'toma.mp4', { type: 'video/mp4' })
+    const second = new File(['bbbbbb'], 'extra.mp4', { type: 'video/mp4' })
+    await user.upload(screen.getByLabelText(/Elegir vídeo, audio o fotos/), [first, second])
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    expect(await screen.findByRole('heading', { name: '¿Qué grabamos hoy?' })).toBeInTheDocument()
+    expect(screen.getByText('corte de subida')).toBeInTheDocument()
+    expect(screen.getByText('Subido')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    expect(await screen.findByRole('heading', { name: 'Revelando tu toma.' })).toBeInTheDocument()
+    expect(encargos).toBe(1)
+    expect(sizes.filter((size) => size === 4)).toEqual([4])
+    expect(sizes.filter((size) => size === 6)).toEqual([6, 6])
+  })
+
+  it('retries a failed encargo from its detail', async () => {
+    resetFakeApi({ onboarded: true })
+    configureFakeApi({ transitionReads: 100 })
+    const user = userEvent.setup()
+    let retried = false
+    const api = {
+      ...fakeApi,
+      getEncargo: async (id) => {
+        const response = await fakeApi.getEncargo(id)
+        if (response.ok && !retried) response.data = { ...response.data, status: 'failed' }
+        return response
+      },
+      retryEncargo: async (id) => {
+        retried = true
+        return { ok: true, data: { id, status: 'queued', kind: 'from_scratch' } }
+      },
+    }
+    render(<App api={api} />)
+    await user.type(await screen.findByLabelText('Tu idea'), 'Otra toma')
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    expect(await screen.findByRole('heading', { name: 'No ha salido.' })).toBeInTheDocument()
+    expect(screen.getByText('Los archivos siguen guardados. Reintentar no vuelve a subirlos.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Reintentar' }))
+    expect(await screen.findByRole('heading', { name: 'Revelando tu toma.' })).toBeInTheDocument()
+    expect(retried).toBe(true)
   })
 })

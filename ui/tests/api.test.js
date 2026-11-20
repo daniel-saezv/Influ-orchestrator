@@ -113,6 +113,29 @@ describe('Worker API client', () => {
     }))
   })
 
+  it('sends a supplied part hash and aborts without a network error', async () => {
+    const digest = vi.spyOn(crypto.subtle, 'digest')
+    const fetch = vi.fn(async (_url, init) => {
+      if (init.signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError')
+      return new Response(JSON.stringify({ ok: true, data: { part: 1, uploaded: true } }), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetch)
+    const blob = new Blob(['clip'], { type: 'video/mp4' })
+    const sha = 'c'.repeat(64)
+
+    await uploadPart('upl-1', 1, blob, sha)
+
+    expect(digest).not.toHaveBeenCalled()
+    expect(fetch).toHaveBeenCalledWith('/v1/me/uploads/upl-1/parts/1', expect.objectContaining({
+      headers: { 'content-type': 'video/mp4', 'x-content-sha256': sha },
+    }))
+    const controller = new AbortController()
+    controller.abort()
+    await expect(uploadPart('upl-1', 1, blob, sha, { signal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    })
+  })
+
   it('sends only the scheduling contract and returns Worker errors', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       ok: false,
@@ -169,6 +192,8 @@ describe('Worker API client', () => {
     expect(api.restoreAccount).toEqual(expect.any(Function))
     expect(api.listArchivedAccounts).toEqual(expect.any(Function))
     expect(api.cancelEncargo).toEqual(expect.any(Function))
+    expect(api.retryEncargo).toEqual(expect.any(Function))
+    expect(api.releaseUpload).toEqual(expect.any(Function))
     expect(api.listEncargos).toEqual(expect.any(Function))
     expect(api.listConnections).toEqual(expect.any(Function))
     expect(api.getConnection).toEqual(expect.any(Function))
