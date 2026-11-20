@@ -129,24 +129,56 @@ export async function renameMe(repo, { email, body, now }) {
   return getMe(repo, { email, now });
 }
 
+function publicAccountRecord(account) {
+  return {
+    account_id: account.account_id,
+    name: account.name,
+    archived_at: account.archived_at ?? null,
+  };
+}
+
 export async function createAccount(repo, { email, body, now }) {
   assertNoControlFields(body);
   const name = assertName(body.name, 'Nombre');
   const user = await repo.ensureUser(email, now);
   requireGuide(user);
-  return repo.createAccount(user.user_id, name, now);
+  const created = await repo.createAccount(user.user_id, name, now);
+  return { ...created, archived_at: null };
 }
 
 export async function renameAccount(repo, { email, accountId, body, now }) {
   assertNoControlFields(body);
   const name = assertName(body.name, 'Nombre');
   await requireOwnedAccount(repo, email, accountId);
-  return repo.renameAccount(accountId, name, now);
+  return publicAccountRecord(await repo.renameAccount(accountId, name, now));
+}
+
+export async function listPersonAccounts(repo, { email, now, searchParams }) {
+  const user = await repo.ensureUser(email, now);
+  const flag = searchParams?.get?.('archived');
+  const archived = flag === '1' || flag === 'true';
+  const rows = await repo.listAccounts(user.user_id, { archived });
+  return { accounts: rows.map(publicAccountRecord) };
+}
+
+export async function archiveAccount(repo, { email, accountId, body, now }) {
+  if (body != null) assertNoControlFields(body);
+  const account = await requireOwnedAccount(repo, email, accountId);
+  if (account.archived_at) return publicAccountRecord(account);
+  return publicAccountRecord(await repo.setAccountArchived(accountId, now, now));
+}
+
+export async function restoreAccount(repo, { email, accountId, body, now }) {
+  if (body != null) assertNoControlFields(body);
+  const account = await requireOwnedAccount(repo, email, accountId);
+  if (!account.archived_at) return publicAccountRecord(account);
+  return publicAccountRecord(await repo.setAccountArchived(accountId, null, now));
 }
 
 export async function createEncargo(repo, { email, body, now }) {
   assertNoControlFields(body);
   const account = await requireOwnedAccount(repo, email, body.account_id);
+  if (account.archived_at) throw err('CONFLICT', 'La cuenta está archivada', 409);
   requireGuide(account);
   const kind = body.kind;
   if (kind !== 'from_scratch' && kind !== 'edit') throw err('INVALID_INPUT', 'kind debe ser from_scratch o edit', 400);
@@ -619,7 +651,10 @@ const PERSON_ROUTES = [
   ['POST', /^\/v1\/me$/, (repo, { email, body, now }) => saveGuide(repo, { email, body, now })],
   ['PATCH', /^\/v1\/me$/, (repo, { email, body, now }) => renameMe(repo, { email, body, now })],
   ['POST', /^\/v1\/me\/accounts$/, (repo, { email, body, now }) => createAccount(repo, { email, body, now })],
+  ['GET', /^\/v1\/me\/accounts$/, (repo, ctx) => listPersonAccounts(repo, ctx)],
   ['PATCH', /^\/v1\/me\/accounts\/([^/]+)$/, (repo, { email, body, now }, m) => renameAccount(repo, { email, accountId: m[1], body, now })],
+  ['POST', /^\/v1\/me\/accounts\/([^/]+)\/archive$/, (repo, { email, body, now }, m) => archiveAccount(repo, { email, accountId: m[1], body, now })],
+  ['POST', /^\/v1\/me\/accounts\/([^/]+)\/restore$/, (repo, { email, body, now }, m) => restoreAccount(repo, { email, accountId: m[1], body, now })],
   ['POST', /^\/v1\/me\/encargos$/, (repo, ctx) => createEncargo(repo, ctx)],
   ['GET', /^\/v1\/me\/encargos$/, (repo, { email, now }) => listEncargos(repo, { email, now })],
   ['GET', /^\/v1\/me\/encargos\/([^/]+)$/, (repo, { email }, m) => getEncargo(repo, { email, encargoId: m[1] })],

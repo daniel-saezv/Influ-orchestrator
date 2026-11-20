@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   api,
+  archiveAccount,
   createUpload,
   getEncargo,
   getMedia,
@@ -164,9 +165,29 @@ describe('Worker API client', () => {
     })
     expect(response.data.url).toBe('blob:preview')
     expect(createObjectURL).toHaveBeenCalled()
+    expect(api.archiveAccount).toEqual(expect.any(Function))
+    expect(api.restoreAccount).toEqual(expect.any(Function))
+    expect(api.listArchivedAccounts).toEqual(expect.any(Function))
     expect(api.cancelEncargo).toEqual(expect.any(Function))
     expect(api.listEncargos).toEqual(expect.any(Function))
     expect(api.listConnections).toEqual(expect.any(Function))
     expect(api.getConnection).toEqual(expect.any(Function))
+  })
+
+  it('archives an account without a body and maps the id', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      data: { account_id: 'acc-9', name: 'Ana', archived_at: '2026-11-19T12:00:00.000Z' },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetch)
+
+    const response = await archiveAccount('acc-9')
+
+    expect(fetch).toHaveBeenCalledWith('/v1/me/accounts/acc-9/archive', expect.objectContaining({
+      credentials: 'same-origin',
+      method: 'POST',
+    }))
+    expect(fetch.mock.calls[0][1].body).toBeUndefined()
+    expect(response.data).toMatchObject({ id: 'acc-9', name: 'Ana', archived_at: '2026-11-19T12:00:00.000Z' })
   })
 })

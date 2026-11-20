@@ -330,6 +330,67 @@ test('rate limit por persona: un correo no gasta el cupo de otro', async () => {
   assert.equal((await call('otra@example.com')).status, 200);
 });
 
+test('cuentas: renombrar, archivar y ocultarlas hasta restaurarlas', async () => {
+  const shim = db();
+  const env = meEnv(shim, '60');
+  const exp = Math.floor(Date.now() / 1000) + 3600;
+  const person = (email) => signer.sign({ aud: AUD, exp, email });
+  const call = (method, path, token, body) => workerMod.fetch(new Request(`https://local.test${path}`, {
+    method,
+    headers: { 'cf-access-jwt-assertion': token, ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  }), env);
+  const json = async (res) => ({ status: res.status, ...(res.status === 204 ? {} : await res.json()) });
+  const ana = person('ana@example.com');
+  const guide = await json(await call('POST', '/v1/me', ana, { display_name: 'Ana', time_zone: 'Europe/Madrid' }));
+  const kept = guide.data.accounts[0].account_id;
+  const extra = await json(await call('POST', '/v1/me/accounts', ana, { name: 'Ana vídeos' }));
+  const encargo = await json(await call('POST', '/v1/me/encargos', ana, {
+    account_id: extra.data.account_id, kind: 'from_scratch', note: 'una idea', format: 'short_video',
+    targets: [{ platform: 'youtube', target: 'short' }],
+  }));
+  assert.equal(encargo.status, 200);
+  const renamed = await json(await call('PATCH', `/v1/me/accounts/${extra.data.account_id}`, ana, { name: 'Ana archivo' }));
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.data.name, 'Ana archivo');
+  assert.equal(renamed.data.archived_at, null);
+  const forbidden = await json(await call('POST', `/v1/me/accounts/${extra.data.account_id}/archive`, ana, { status: 'live' }));
+  assert.equal(forbidden.status, 400);
+  const archived = await json(await call('POST', `/v1/me/accounts/${extra.data.account_id}/archive`, ana));
+  assert.equal(archived.status, 200);
+  assert.equal(archived.data.name, 'Ana archivo');
+  assert.ok(archived.data.archived_at);
+  const again = await json(await call('POST', `/v1/me/accounts/${extra.data.account_id}/archive`, ana, {}));
+  assert.equal(again.data.archived_at, archived.data.archived_at);
+  const me = await json(await call('GET', '/v1/me', ana));
+  assert.deepEqual(me.data.accounts.map((item) => item.account_id), [kept]);
+  const active = await json(await call('GET', '/v1/me/accounts', ana));
+  assert.equal(active.data.accounts.length, 1);
+  assert.equal(active.data.accounts[0].archived_at, null);
+  const hidden = await json(await call('GET', '/v1/me/accounts?archived=1', ana));
+  assert.equal(hidden.data.accounts.length, 1);
+  assert.equal(hidden.data.accounts[0].account_id, extra.data.account_id);
+  const blocked = await json(await call('POST', '/v1/me/encargos', ana, {
+    account_id: extra.data.account_id, kind: 'from_scratch', note: 'otra', format: 'image',
+    targets: [{ platform: 'instagram', target: 'feed' }],
+  }));
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.error.code, 'CONFLICT');
+  const listed = await json(await call('GET', '/v1/me/encargos', ana));
+  assert.equal(listed.data.encargos.some((item) => item.encargo_id === encargo.data.encargo_id), true);
+  const bob = person('bob@example.com');
+  await json(await call('POST', '/v1/me', bob, { display_name: 'Bob', time_zone: 'UTC' }));
+  const foreign = await json(await call('POST', `/v1/me/accounts/${extra.data.account_id}/archive`, bob));
+  assert.equal(foreign.status, 404);
+  const restored = await json(await call('POST', `/v1/me/accounts/${extra.data.account_id}/restore`, ana));
+  assert.equal(restored.status, 200);
+  assert.equal(restored.data.archived_at, null);
+  const back = await json(await call('GET', '/v1/me', ana));
+  assert.equal(back.data.accounts.length, 2);
+  const indexNames = shim._raw.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((row) => row.name);
+  assert.equal(indexNames.includes('idx_accounts_user_archived'), true);
+});
+
 function meEnv(shim, userLimit) {
   return {
     DB: shim,

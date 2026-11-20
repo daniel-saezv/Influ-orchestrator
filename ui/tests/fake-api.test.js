@@ -61,6 +61,17 @@ describe('fake Phase B API', () => {
     const account = await fakeApi.post('/v1/me/accounts', { name: 'Segunda' })
     expect(account.ok).toBe(true)
     expect((await fakeApi.patch(`/v1/me/accounts/${account.data.id}`, { name: 'Nueva' })).data.name).toBe('Nueva')
+    const archived = await fakeApi.post(`/v1/me/accounts/${account.data.id}/archive`)
+    expect(archived.data.archived_at).toEqual(expect.any(String))
+    expect((await fakeApi.getMe()).data.accounts.some((item) => item.id === account.data.id)).toBe(false)
+    expect((await fakeApi.listArchivedAccounts()).data.accounts.map((item) => item.id)).toEqual([account.data.id])
+    const blocked = await fakeApi.createEncargo({
+      account_id: account.data.id, kind: 'from_scratch', note: 'idea', format: 'short_video',
+      targets: [{ platform: 'youtube', target: 'short' }],
+    })
+    expect(blocked.status).toBe(409)
+    expect((await fakeApi.post(`/v1/me/accounts/${account.data.id}/restore`)).data.archived_at).toBeNull()
+    expect((await fakeApi.getMe()).data.accounts.some((item) => item.id === account.data.id)).toBe(true)
     expect((await fakeApi.get('/v1/me')).ok).toBe(true)
     expect((await fakeApi.request('/v1/unknown')).ok).toBe(false)
   })
