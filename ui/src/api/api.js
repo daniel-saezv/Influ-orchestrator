@@ -134,6 +134,17 @@ export async function completeUpload(uploadId, body) {
   return request(`/v1/me/uploads/${encoded(uploadId)}/complete`, { method: 'POST', body })
 }
 
+export async function releaseUpload(uploadId) {
+  return request(`/v1/me/uploads/${encoded(uploadId)}/release`, { method: 'POST' })
+}
+
+export async function retryEncargo(encargoId) {
+  return mapResponse(
+    await request(`/v1/me/encargos/${encoded(encargoId)}/retry`, { method: 'POST' }),
+    mapEncargo,
+  )
+}
+
 export async function listEncargos() {
   return mapResponse(await request('/v1/me/encargos'), (data) => ({
     ...data,
@@ -249,6 +260,8 @@ export const api = {
   createUpload,
   uploadPart,
   completeUpload,
+  releaseUpload,
+  retryEncargo,
   getEncargo,
   getMedia,
   decideEncargo,

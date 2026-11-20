@@ -1,6 +1,7 @@
 // Subida por partes de la persona. El cuerpo no se hashea aquí.
 import { err } from '../core/domain/errors.js';
 import { assertNoControlFields, assertSha256 } from '../core/domain/encargos.js';
+import { deleteAssetObjects } from './r2-gc.js';
 import {
   MAX_CLASS_A_GLOBAL, MAX_CLASS_A_USER, MAX_CLASS_B_GLOBAL, MAX_CLASS_B_USER,
   MAX_FILE_BYTES, MAX_GLOBAL_BYTES, MAX_USER_BYTES, PART_SIZE_BYTES,
@@ -208,6 +209,50 @@ export async function completeUpload(repo, { email, uploadId, body, now }) {
     size_bytes: session.size_bytes,
     complete: true,
     status: encargo?.status ?? 'queued',
+  };
+}
+
+export async function releaseUpload(repo, { email, uploadId, now, r2 }) {
+  if (!UUID_RE.test(uploadId ?? '')) throw NOT_FOUND();
+  const user = await requireUser(repo, email);
+  const session = await repo.uploadForUser(user.user_id, uploadId);
+  if (!session) throw NOT_FOUND();
+  const encargo = await repo.encargoForEmail(email, session.encargo_id);
+  if (!encargo) throw NOT_FOUND();
+  if (encargo.status !== 'draft' && encargo.status !== 'queued') {
+    throw err('CONFLICT', 'Este encargo ya no admite quitar archivos', 409);
+  }
+  const parts = parseParts(session.part_hashes_json);
+  const keys = Object.values(parts).map((part) => part?.key).filter(Boolean);
+  if (session.completed_at) {
+    const rows = (await repo.listAssets(encargo.encargo_id)).filter((row) => (
+      row.role === 'source' && !row.delete_pending && keys.includes(row.r2_key)
+    ));
+    if (rows.length) {
+      const deleted = await deleteAssetObjects(repo, r2, rows, user.user_id);
+      if (deleted.failed) throw err('R2_UNAVAILABLE', 'No se pudo quitar el archivo', 503);
+    }
+  } else if (keys.length) {
+    if (!r2) throw err('R2_UNAVAILABLE', 'El almacenamiento no está disponible', 503);
+    for (const key of keys) {
+      try {
+        await r2.delete(key);
+      } catch {
+        throw err('R2_UNAVAILABLE', 'No se pudo quitar el archivo', 503);
+      }
+    }
+    if (Number(session.bytes_reserved) > 0) await repo.releaseBytes(user.user_id, Number(session.bytes_reserved));
+  } else if (Number(session.bytes_reserved) > 0) {
+    await repo.releaseBytes(user.user_id, Number(session.bytes_reserved));
+  }
+  await repo.deleteUploadSession(uploadId);
+  const drafted = await repo.markDraftIfNoSource(encargo.encargo_id, now);
+  await repo.recordEncargoEvent(encargo.account_id, encargo.encargo_id, now, 'source_released', { upload_id: uploadId });
+  return {
+    upload_id: uploadId,
+    encargo_id: encargo.encargo_id,
+    released: true,
+    status: drafted ? 'draft' : encargo.status,
   };
 }
 

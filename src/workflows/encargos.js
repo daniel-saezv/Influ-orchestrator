@@ -9,8 +9,8 @@ import {
 import { assertEncargoSelection } from '../core/domain/formats.js';
 import { MAX_CLASS_B_GLOBAL, MAX_CLASS_B_USER } from '../core/domain/r2-quota.js';
 import { PRESIGN_TTL_SECONDS, signingUnavailableError } from '../adapters/storage/r2-presign.js';
-import { deleteAssetObjects } from './r2-gc.js';
-import { completeUpload, createUpload, etagMatches } from './uploads.js';
+import { deleteAssetObjects, releaseReservationHold } from './r2-gc.js';
+import { completeUpload, createUpload, etagMatches, releaseUpload } from './uploads.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NOT_FOUND = () => err('NOT_FOUND', 'No encontrado', 404);
@@ -269,6 +269,48 @@ export async function cancelEncargo(repo, { email, encargoId, now, r2 }) {
   if (encargo.batch_id) await repo.cancelLinkedBatch({ batchId: encargo.batch_id, now });
   const deleted = await deleteAssetObjects(repo, r2, started.rows, encargo.user_id);
   return { encargo_id: encargo.encargo_id, status: 'cancelled', bytes_released: deleted.bytes };
+}
+
+async function verifyStoredSource(repo, r2, encargo, assets, now) {
+  if (!assets.length) return;
+  if (!r2) throw err('R2_UNAVAILABLE', 'El almacenamiento no está disponible', 503);
+  for (const asset of assets) {
+    const reserved = await repo.reserveDaily(encargo.user_id, 'b', now, MAX_CLASS_B_USER, MAX_CLASS_B_GLOBAL);
+    if (!reserved) throw err('QUOTA_EXCEEDED', 'Tope de lecturas alcanzado', 413);
+    let head;
+    try {
+      head = await r2.head(asset.r2_key);
+    } catch {
+      await repo.releaseDaily(encargo.user_id, 'b', now);
+      throw err('R2_UNAVAILABLE', 'No se pudo comprobar el origen', 503);
+    }
+    if (!head || head.sha256 !== asset.sha256 || Number(head.size) !== Number(asset.size_bytes)) {
+      throw err('INTEGRITY_PART_MISMATCH', 'La parte almacenada no coincide', 409);
+    }
+  }
+}
+
+export async function retryEncargo(repo, { email, encargoId, body, now, r2 }) {
+  if (body != null) assertNoControlFields(body);
+  const encargo = await requireOwnedEncargo(repo, email, encargoId);
+  if (encargo.status !== 'failed') throw err('CONFLICT', 'Solo se puede reintentar un encargo fallido', 409);
+  const assets = await repo.listSourceAssets(encargo.encargo_id);
+  if (encargo.kind === 'edit' && assets.length === 0) {
+    throw err('CONFLICT', 'No quedan archivos de origen para reintentar', 409);
+  }
+  await verifyStoredSource(repo, r2, encargo, assets, now);
+  const open = await repo.listOpenReservations(encargo.encargo_id);
+  for (const row of open) await releaseReservationHold(repo, row, now);
+  const ok = await repo.requeueFailedEncargo(encargo.encargo_id, now);
+  if (!ok) throw err('CONFLICT', 'Solo se puede reintentar un encargo fallido', 409);
+  await repo.recordEncargoEvent(encargo.account_id, encargo.encargo_id, now, 'retried', { assets: assets.length });
+  await repo.audit(`access:${email}`, 'ENCARGO_RETRIED', null, {
+    encargo_id: encargo.encargo_id,
+    account_id: encargo.account_id,
+    assets: assets.length,
+  }, now);
+  const fresh = await repo.encargoForEmail(email, encargo.encargo_id);
+  return publicEncargo(fresh, []);
 }
 
 export async function scheduleEncargo(repo, { email, encargoId, body, now, dispatchBatch }) {
@@ -625,8 +667,10 @@ const PERSON_ROUTES = [
   ['GET', /^\/v1\/me\/encargos\/([^/]+)$/, (repo, { email }, m) => getEncargo(repo, { email, encargoId: m[1] })],
   ['POST', /^\/v1\/me\/uploads$/, (repo, ctx) => createUpload(repo, ctx)],
   ['POST', /^\/v1\/me\/uploads\/([^/]+)\/complete$/, (repo, ctx, m) => completeUpload(repo, { ...ctx, uploadId: m[1] })],
+  ['POST', /^\/v1\/me\/uploads\/([^/]+)\/release$/, (repo, ctx, m) => releaseUpload(repo, { ...ctx, uploadId: m[1] })],
   ['POST', /^\/v1\/me\/encargos\/([^/]+)\/decision$/, (repo, ctx, m) => decideEncargo(repo, { ...ctx, encargoId: m[1] })],
   ['POST', /^\/v1\/me\/encargos\/([^/]+)\/cancel$/, (repo, ctx, m) => cancelEncargo(repo, { ...ctx, encargoId: m[1] })],
+  ['POST', /^\/v1\/me\/encargos\/([^/]+)\/retry$/, (repo, ctx, m) => retryEncargo(repo, { ...ctx, encargoId: m[1] })],
   ['POST', /^\/v1\/me\/encargos\/([^/]+)\/schedule$/, (repo, ctx, m) => scheduleEncargo(repo, { ...ctx, encargoId: m[1] })],
   ['GET', /^\/v1\/me\/accounts\/([^/]+)\/streak$/, (repo, { email, now }, m) => getStreak(repo, { email, accountId: m[1], now })],
   ['GET', /^\/v1\/me\/accounts\/([^/]+)\/activity$/, (repo, { email }, m) => getActivity(repo, { email, accountId: m[1] })],

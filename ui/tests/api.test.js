@@ -188,6 +188,8 @@ describe('Worker API client', () => {
     expect(response.data.url).toBe('blob:preview')
     expect(createObjectURL).toHaveBeenCalled()
     expect(api.cancelEncargo).toEqual(expect.any(Function))
+    expect(api.retryEncargo).toEqual(expect.any(Function))
+    expect(api.releaseUpload).toEqual(expect.any(Function))
     expect(api.listEncargos).toEqual(expect.any(Function))
     expect(api.listConnections).toEqual(expect.any(Function))
     expect(api.getConnection).toEqual(expect.any(Function))

@@ -313,6 +313,60 @@ test('cambios borra entregables de esta versión y de la anterior; el origen sig
   assert.deepEqual(new Uint8Array(await again.arrayBuffer()), origin);
 });
 
+test('soltar la subida devuelve los bytes y no toca un encargo ya reclamado', async () => {
+  const h = harness();
+  const { email, encargoId } = await draft(h);
+  const bytes = new Uint8Array([5, 5, 5, 5]);
+  const digest = shaHex(bytes);
+  const opened = await h.read(await h.call('POST', '/v1/me/uploads', email, {
+    json: { encargo_id: encargoId, size_bytes: bytes.length, mime: 'video/mp4', sha256: digest },
+  }));
+  await h.read(await h.call('PUT', `/v1/me/uploads/${opened.data.upload_id}/parts/1`, email, {
+    raw: bytes, headers: { 'content-type': 'video/mp4', 'x-content-sha256': digest },
+  }));
+  const user = await h.repo.userByEmail(email);
+  assert.equal(await h.repo.storedBytes(user.user_id), bytes.length);
+  const early = await h.read(await h.call('POST', `/v1/me/uploads/${opened.data.upload_id}/release`, email));
+  assert.equal(early.status, 200, JSON.stringify(early.error));
+  assert.equal(early.data.status, 'draft');
+  assert.equal(await h.repo.storedBytes(user.user_id), 0);
+  assert.equal(h.r2.objects.size, 0);
+  const gone = await h.read(await h.call('POST', `/v1/me/uploads/${opened.data.upload_id}/release`, email));
+  assert.equal(gone.status, 404);
+
+  const again = await h.read(await h.call('POST', '/v1/me/uploads', email, {
+    json: { encargo_id: encargoId, size_bytes: bytes.length, mime: 'video/mp4', sha256: digest },
+  }));
+  await h.read(await h.call('PUT', `/v1/me/uploads/${again.data.upload_id}/parts/1`, email, {
+    raw: bytes, headers: { 'content-type': 'video/mp4', 'x-content-sha256': digest },
+  }));
+  const done = await h.read(await h.call('POST', `/v1/me/uploads/${again.data.upload_id}/complete`, email, { json: { sha256: digest } }));
+  assert.equal(done.data.status, 'queued');
+  const second = new Uint8Array([6, 6, 6, 6, 6]);
+  const secondDigest = shaHex(second);
+  const extra = await h.read(await h.call('POST', '/v1/me/uploads', email, {
+    json: { encargo_id: encargoId, size_bytes: second.length, mime: 'video/mp4', sha256: secondDigest },
+  }));
+  await h.read(await h.call('PUT', `/v1/me/uploads/${extra.data.upload_id}/parts/1`, email, {
+    raw: second, headers: { 'content-type': 'video/mp4', 'x-content-sha256': secondDigest },
+  }));
+  await h.read(await h.call('POST', `/v1/me/uploads/${extra.data.upload_id}/complete`, email, { json: { sha256: secondDigest } }));
+  const foreign = await h.read(await h.call('POST', `/v1/me/uploads/${extra.data.upload_id}/release`, 'otro@example.com'));
+  assert.equal(foreign.status, 404);
+  const dropped = await h.read(await h.call('POST', `/v1/me/uploads/${extra.data.upload_id}/release`, email));
+  assert.equal(dropped.status, 200, JSON.stringify(dropped.error));
+  assert.equal(dropped.data.status, 'queued');
+  assert.equal(await h.repo.storedBytes(user.user_id), bytes.length);
+  assert.equal(h.shim._raw.prepare(`SELECT COUNT(*) AS n FROM encargo_assets WHERE encargo_id = ? AND delete_pending = 0`).get(encargoId).n, 1);
+  assert.equal(await h.repo.sourceFileSha(encargoId), digest);
+
+  await h.repo.claimEncargo(encargoId, new Date().toISOString());
+  const blocked = await h.read(await h.call('POST', `/v1/me/uploads/${again.data.upload_id}/release`, email));
+  assert.equal(blocked.status, 409);
+  assert.equal(await h.repo.storedBytes(user.user_id), bytes.length);
+  assert.equal(JSON.stringify(dropped.data).includes('http'), false);
+});
+
 test('cancelar deja a cero los bytes del encargo y no baja la ventana de clase A', async () => {
   const h = harness();
   const { email, encargoId } = await draft(h);
