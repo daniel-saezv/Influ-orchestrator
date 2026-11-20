@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ArrowLeft,
   ArrowRight,
+  Bell,
   CalendarClock,
   Check,
   Clapperboard,
@@ -12,6 +14,7 @@ import {
   Inbox,
   List,
   LoaderCircle,
+  Maximize2,
   Monitor,
   MonitorPlay,
   Moon,
@@ -48,6 +51,15 @@ import { Progress } from './components/ui/progress.jsx'
 import { Skeleton } from './components/ui/skeleton.jsx'
 import { Textarea } from './components/ui/textarea.jsx'
 import { ToggleGroup, ToggleGroupItem } from './components/ui/toggle-group.jsx'
+import { LANES, encargoLane, readyArrivals } from './lib/encargo-lane.js'
+import {
+  dismissReadyNotices,
+  noticesGranted,
+  notifyReadyEncargo,
+  requestReadyNotices,
+  shouldAnnounceReady,
+  shouldAskForNotices,
+} from './lib/ready-notice.js'
 import { applyTheme, readTheme, saveTheme } from './lib/theme.js'
 
 const PLATFORMS = ['YouTube', 'Instagram', 'TikTok']
@@ -486,11 +498,11 @@ function previewMediaKind(contentType) {
   return null
 }
 
-function FramePreview({ preview, posterOnly, onMediaError, note, version }) {
+function FramePreview({ preview, posterOnly, onMediaError, note, version, expanded = false }) {
   const kind = !posterOnly && preview?.url ? previewMediaKind(preview.content_type) : null
   if (!kind) return <PosterFrame note={note} version={version} />
   if (kind === 'image') {
-    return <img className="frame-media frame-media-image" src={preview.url} alt="Previa del encargo" onError={onMediaError} />
+    return <img className={expanded ? 'stage-media-fit' : 'frame-media frame-media-image'} src={preview.url} alt="Previa del encargo" onError={onMediaError} />
   }
   if (kind === 'audio') {
     return (
@@ -501,7 +513,129 @@ function FramePreview({ preview, posterOnly, onMediaError, note, version }) {
       </div>
     )
   }
-  return <video className="frame-media" src={preview.url} playsInline controls onError={onMediaError} />
+  return (
+    <video
+      className={expanded ? 'stage-media-fit' : 'frame-media'}
+      src={preview.url}
+      playsInline
+      controls={expanded}
+      autoPlay={expanded}
+      preload={expanded ? 'auto' : 'metadata'}
+      onError={onMediaError}
+    />
+  )
+}
+
+function PreviewLightbox({ preview, onClose, onMediaError }) {
+  const panelRef = useRef(null)
+  const opener = useRef(document.activeElement)
+  const close = useCallback(() => onClose(), [onClose])
+  useEffect(() => {
+    const openerNode = opener.current
+    const node = panelRef.current
+    document.body.classList.add('stage-open')
+    const closeButton = node?.querySelector('[data-stage-close]')
+    if (closeButton instanceof HTMLElement) closeButton.focus()
+    let startX = 0
+    let startY = 0
+    let tracking = false
+    const chrome = (target) => target instanceof Element && !target.closest('video, button, input, a')
+    const start = (event) => {
+      if (event.touches?.length !== 1 || !chrome(event.target)) return
+      startX = event.touches[0].clientX
+      startY = event.touches[0].clientY
+      tracking = true
+    }
+    const move = (event) => {
+      if (!tracking || !node) return
+      const dx = event.touches[0].clientX - startX
+      const dy = event.touches[0].clientY - startY
+      if (dy > 12 && dy > Math.abs(dx)) {
+        event.preventDefault()
+        if (motionOk()) node.style.transform = `translateY(${Math.min(dy, 220)}px)`
+      }
+    }
+    const end = (event) => {
+      if (!tracking || !node) return
+      tracking = false
+      const touch = event.changedTouches[0]
+      const dx = touch.clientX - startX
+      const dy = touch.clientY - startY
+      node.style.transform = ''
+      if (dy > 72 && dy > Math.abs(dx)) close()
+    }
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        close()
+        return
+      }
+      if (event.key !== 'Tab' || !node) return
+      const items = [...node.querySelectorAll('button, video, [href], input, [tabindex]:not([tabindex="-1"])')].filter((item) => !item.disabled)
+      if (!items.length) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    node?.addEventListener('touchstart', start, { passive: true })
+    node?.addEventListener('touchmove', move, { passive: false })
+    node?.addEventListener('touchend', end)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.body.classList.remove('stage-open')
+      node?.removeEventListener('touchstart', start)
+      node?.removeEventListener('touchmove', move)
+      node?.removeEventListener('touchend', end)
+      window.removeEventListener('keydown', onKey)
+      if (openerNode instanceof HTMLElement && document.contains(openerNode)) openerNode.focus()
+    }
+  }, [close])
+  return (
+    <div className="stage" role="dialog" aria-modal="true" aria-labelledby="stage-title" aria-describedby="stage-hint" ref={panelRef}>
+      <p id="stage-title" className="sr-only">Previa a pantalla completa</p>
+      <div className="stage-bar">
+        <span className="stage-grip" aria-hidden="true" />
+        <p id="stage-hint" className="stage-hint">Desliza hacia abajo para cerrar</p>
+        <Button type="button" variant="ghost" className="stage-close rounded-full" data-stage-close aria-label="Cerrar previa" onClick={close}>
+          <X aria-hidden="true" />
+          Cerrar
+        </Button>
+      </div>
+      <div className="stage-frame">
+        <FramePreview preview={preview} expanded onMediaError={onMediaError} />
+      </div>
+    </div>
+  )
+}
+
+function ReviewFrame({ preview, posterOnly, onMediaError, note, version, synthetic }) {
+  const [open, setOpen] = useState(false)
+  const kind = !posterOnly && preview?.url ? previewMediaKind(preview.content_type) : null
+  const expandable = kind === 'image' || kind === 'video'
+  const close = useCallback(() => setOpen(false), [])
+  return (
+    <div className="frame">
+      <div className="frame-crop">
+        <FramePreview preview={preview} posterOnly={posterOnly} onMediaError={onMediaError} note={note} version={version} />
+        {expandable && (
+          <button type="button" className="frame-hit" aria-haspopup="dialog" aria-label="Ver la previa a pantalla completa" onClick={() => { tap(); setOpen(true) }}>
+            <span aria-hidden="true"><Maximize2 /></span>
+          </button>
+        )}
+      </div>
+      {synthetic && <Badge variant="secondary" className="ai-note"><Sparkles aria-hidden="true" />Hecho con ayuda de IA</Badge>}
+      {open && createPortal(
+        <PreviewLightbox preview={preview} onClose={close} onMediaError={onMediaError} />,
+        document.body,
+      )}
+    </div>
+  )
 }
 
 function SwipeDeck({ disabled, onRight, onLeft, children }) {
@@ -675,6 +809,14 @@ function App({ api = realApi }) {
   const [theme, setTheme] = useThemePreference()
   const [arrive, setArrive] = useState(null)
   const [encargosError, setEncargosError] = useState('')
+  const [listBusy, setListBusy] = useState(false)
+  const [lane, setLane] = useState('todos')
+  const [noticeAsk, setNoticeAsk] = useState(() => shouldAskForNotices())
+  const [renamingId, setRenamingId] = useState(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [archivingId, setArchivingId] = useState(null)
+  const [showArchived, setShowArchived] = useState(false)
+  const [archivedAccounts, setArchivedAccounts] = useState(null)
   const [activityError, setActivityError] = useState('')
   const [activityNonce, setActivityNonce] = useState(0)
   const [openingId, setOpeningId] = useState('')
@@ -685,6 +827,9 @@ function App({ api = realApi }) {
   const meRef = useRef(null)
   const screenRef = useRef(screen)
   const listRequest = useRef(0)
+  const encargosRef = useRef(null)
+  const announcedReady = useRef(new Set())
+  const encargoStatusRef = useRef(null)
   const fileInputRef = useRef(null)
   const uploadAbortRef = useRef(null)
   const preparingLive = screen === 'preparing' && !uploading && encargo?.status !== 'failed' && encargo?.status !== 'draft'
@@ -704,10 +849,6 @@ function App({ api = realApi }) {
   const go = useCallback((next, to = 'forward', historyMode = 'push') => {
     setDirection(to)
     setError('')
-    if (next === 'encargos') {
-      setEncargos(null)
-      setEncargosError('')
-    }
     if (next !== 'preview') setArrive(null)
     setScreen(next)
     screenRef.current = next
@@ -781,18 +922,37 @@ function App({ api = realApi }) {
     loadStreaks(data.accounts)
   }, [loadStreaks])
 
+  const announceReady = useCallback((item) => {
+    const id = item?.id ?? item?.encargo_id
+    if (!id) return
+    const key = `${id}:${item.version ?? 0}:${item.result_sha256 ?? item.preview?.sha256 ?? ''}`
+    if (announcedReady.current.has(key)) return
+    announcedReady.current.add(key)
+    const notice = notifyReadyEncargo({ title: encargoTitle(item), encargoId: id })
+    notify(notice.message)
+  }, [notify])
+
   const loadEncargos = useCallback(async () => {
     const requestId = ++listRequest.current
+    await Promise.resolve()
+    if (requestId !== listRequest.current) return
+    if (encargosRef.current != null) setListBusy(true)
     const response = await api.listEncargos()
     if (requestId !== listRequest.current) return
+    setListBusy(false)
     if (response.ok) {
-      setEncargos(response.data.encargos)
+      const next = response.data.encargos
+      for (const item of readyArrivals(encargosRef.current, next)) announceReady(item)
+      encargosRef.current = next
+      setEncargos(next)
       setEncargosError('')
-    } else {
+    } else if (encargosRef.current == null) {
       setEncargos([])
       setEncargosError(response.error.message)
+    } else {
+      notify(response.error.message, 'error')
     }
-  }, [api])
+  }, [api, announceReady, notify])
 
   const applyEncargo = useCallback(async (data, historyMode = 'push') => {
     encargoIdRef.current = data.id
@@ -838,6 +998,7 @@ function App({ api = realApi }) {
     }
     const route = readRoute()
     if (route.name === 'encargos') {
+      encargosRef.current = null
       setEncargos(null)
       setScreen('encargos')
       return
@@ -882,28 +1043,38 @@ function App({ api = realApi }) {
 
   useEffect(() => {
     encargoIdRef.current = encargo?.id ?? null
+    encargoStatusRef.current = encargo?.status ?? null
     meRef.current = me
     screenRef.current = screen
-  }, [encargo?.id, me, screen])
+  }, [encargo?.id, encargo?.status, me, screen])
 
   useEffect(() => {
     if (screen !== 'encargos') return undefined
     let stopped = false
     const requestId = ++listRequest.current
+    queueMicrotask(() => {
+      if (!stopped && requestId === listRequest.current && encargosRef.current != null) setListBusy(true)
+    })
     api.listEncargos().then((response) => {
       if (stopped || requestId !== listRequest.current) return
+      setListBusy(false)
       if (response.ok) {
-        setEncargos(response.data.encargos)
+        const next = response.data.encargos
+        for (const item of readyArrivals(encargosRef.current, next)) announceReady(item)
+        encargosRef.current = next
+        setEncargos(next)
         setEncargosError('')
-      } else {
+      } else if (encargosRef.current == null) {
         setEncargos([])
         setEncargosError(response.error.message)
+      } else {
+        notify(response.error.message, 'error')
       }
     })
     return () => {
       stopped = true
     }
-  }, [api, screen])
+  }, [api, screen, announceReady, notify])
 
   useEffect(() => {
     if (!encargo?.id || !TRACKED_SCREENS.has(screen)) return
@@ -918,8 +1089,6 @@ function App({ api = realApi }) {
       setArrive(null)
       if (route.name === 'encargos') {
         screenRef.current = 'encargos'
-        setEncargos(null)
-        setEncargosError('')
         setScreen('encargos')
         return
       }
@@ -1001,6 +1170,98 @@ function App({ api = realApi }) {
     setAccountId(created.id)
     setStreaks((current) => ({ ...current, [created.id]: 0 }))
     notify(`Cuenta «${created.name}» lista`)
+  }
+
+  const allowNotices = async () => {
+    tap()
+    const result = await requestReadyNotices()
+    setNoticeAsk(shouldAskForNotices())
+    if (result === 'granted') notify('Te aviso cuando esté lista')
+    else if (result === 'denied') notify('Avisos bloqueados en el navegador', 'error')
+    else notify('Este navegador no muestra avisos fuera de la app', 'error')
+  }
+
+  const skipNotices = () => {
+    tap()
+    dismissReadyNotices()
+    setNoticeAsk(false)
+  }
+
+  const saveAccountName = async (event) => {
+    event.preventDefault()
+    const item = me?.accounts.find((account) => account.id === renamingId)
+    const next = renameDraft.trim()
+    if (!item) return
+    if (!next || next === item.name) {
+      setRenamingId(null)
+      return
+    }
+    const response = await api.updateAccount(item.id, { name: next })
+    if (!response.ok) {
+      notify(response.error.message, 'error')
+      return
+    }
+    const name = response.data.name ?? next
+    setMe((current) => ({
+      ...current,
+      accounts: current.accounts.map((account) => (account.id === item.id ? { ...account, name } : account)),
+    }))
+    setEncargos((current) => {
+      const updated = current?.map((row) => (row.account_id === item.id ? { ...row, account_name: name } : row)) ?? current
+      encargosRef.current = updated
+      return updated
+    })
+    setArchivedAccounts((current) => current?.map((account) => (account.id === item.id ? { ...account, name } : account)) ?? current)
+    setRenamingId(null)
+    notify('Nombre de la cuenta guardado')
+  }
+
+  const confirmArchive = async (item) => {
+    tap()
+    const response = await api.archiveAccount(item.id)
+    if (!response.ok) {
+      notify(response.error.message, 'error')
+      return
+    }
+    const archived = { ...item, ...response.data, id: item.id, archived_at: response.data.archived_at }
+    setMe((current) => ({ ...current, accounts: current.accounts.filter((account) => account.id !== item.id) }))
+    setAccountId((current) => {
+      if (current !== item.id) return current
+      return me.accounts.find((account) => account.id !== item.id && !account.pending)?.id ?? null
+    })
+    setArchivedAccounts((current) => (current ? [archived, ...current.filter((account) => account.id !== item.id)] : current))
+    setArchivingId(null)
+    notify(`«${item.name}» archivada`)
+  }
+
+  const restoreArchived = async (item) => {
+    tap()
+    const response = await api.restoreAccount(item.id)
+    if (!response.ok) {
+      notify(response.error.message, 'error')
+      return
+    }
+    const restored = { id: item.id, name: response.data.name ?? item.name }
+    setArchivedAccounts((current) => current?.filter((account) => account.id !== item.id) ?? current)
+    setMe((current) => ({ ...current, accounts: [...current.accounts, restored] }))
+    setAccountId(restored.id)
+    const streak = await api.getStreak(item.id)
+    if (streak.ok) setStreaks((current) => ({ ...current, [item.id]: streak.data.days }))
+    notify(`«${restored.name}» otra vez activa`)
+  }
+
+  const toggleArchived = async () => {
+    tap()
+    const next = !showArchived
+    setShowArchived(next)
+    if (!next || archivedAccounts) return
+    const response = await api.listArchivedAccounts()
+    if (!response.ok) {
+      notify(response.error.message, 'error')
+      setShowArchived(false)
+      return
+    }
+    setArchivedAccounts(response.data.accounts)
   }
 
   const fail = (message, back = 'studio') => {
@@ -1189,7 +1450,16 @@ function App({ api = realApi }) {
       inflight = true
       try {
         const response = await api.getEncargo(encargoId)
-        if (!response.ok || stopped || response.notModified) return
+        if (!response.ok || stopped) return
+        if (shouldAnnounceReady({
+          notModified: response.notModified,
+          previousStatus: encargoStatusRef.current,
+          nextStatus: response.data?.status,
+        })) {
+          announceReady(response.data)
+        }
+        if (response.notModified) return
+        encargoStatusRef.current = response.data.status
         setEncargo(response.data)
         if (response.data.status === 'cancelled') {
           go('cancelled', 'back')
@@ -1227,7 +1497,7 @@ function App({ api = realApi }) {
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [api, screen, encargoId, uploading, go])
+  }, [api, screen, encargoId, uploading, go, announceReady])
 
   useEffect(() => {
     const url = preview?.url
@@ -1332,9 +1602,13 @@ function App({ api = realApi }) {
     tap()
     const cancelled = await run('cancel', () => api.cancelEncargo(item.id))
     if (!cancelled) return
-    setEncargos((current) => current?.map((row) => (
-      row.id === item.id ? { ...row, ...cancelled, id: row.id, status: cancelled.status ?? 'cancelled' } : row
-    )))
+    setEncargos((current) => {
+      const next = current?.map((row) => (
+        row.id === item.id ? { ...row, ...cancelled, id: row.id, status: cancelled.status ?? 'cancelled' } : row
+      ))
+      encargosRef.current = next
+      return next
+    })
     notify('Encargo cancelado')
   }
 
@@ -1540,8 +1814,8 @@ function App({ api = realApi }) {
         : statusLabel(status)
     const hint = uploading
       ? 'No cierres la app hasta que termine la subida.'
-        : failed
-          ? 'Los archivos siguen guardados. Reintentar no vuelve a subirlos.'
+      : failed
+        ? 'Los archivos siguen guardados. Reintentar no vuelve a subirlos.'
         : draft
           ? 'La subida no terminó. Vuelve al inicio y elige los mismos archivos para continuarla.'
           : 'Puedes cerrar la app; aquí verás el estado de tu encargo cuando vuelvas.'
@@ -1589,6 +1863,16 @@ function App({ api = realApi }) {
         {preparingLive && <p className="sr-only" aria-live="polite">{statusLabel(status)}</p>}
         {encargo && <p className="fine"><FitSummary item={encargo} /></p>}
         <p className="fine">{hint}</p>
+        {preparingLive && noticeAsk && (
+          <div className="notice-ask">
+            <button type="button" className="notice-yes" onClick={allowNotices}>
+              <Bell aria-hidden="true" />
+              Avisarme cuando esté lista
+            </button>
+            <button type="button" className="notice-no" onClick={skipNotices}>Ahora no</button>
+          </div>
+        )}
+        {preparingLive && !noticeAsk && noticesGranted() && <p className="fine">Te aviso cuando esté lista.</p>}
         <ErrorLine>{error}</ErrorLine>
       </>
     )
@@ -1612,18 +1896,14 @@ function App({ api = realApi }) {
         <TopBar onBack={() => go('encargos', 'back')} backLabel="Mis encargos" />
         <Heading eyebrow={`Versión ${encargo?.version ?? 1}`}>Mira <em>lo que he preparado</em></Heading>
         <SwipeDeck disabled={Boolean(busy)} onRight={approveAndSchedule} onLeft={() => setChangeOpen(true)}>
-          <div className="frame">
-            <div className="frame-crop">
-              <FramePreview
-                preview={preview}
-                posterOnly={posterOnly}
-                onMediaError={() => setPosterOnly(true)}
-                note={encargo?.note ?? note}
-                version={encargo?.version}
-              />
-            </div>
-            {synthetic && <Badge variant="secondary" className="ai-note"><Sparkles aria-hidden="true" />Hecho con ayuda de IA</Badge>}
-          </div>
+          <ReviewFrame
+            preview={preview}
+            posterOnly={posterOnly}
+            onMediaError={() => setPosterOnly(true)}
+            note={encargo?.note ?? note}
+            version={encargo?.version}
+            synthetic={synthetic}
+          />
         </SwipeDeck>
         <p className="fine swipe-hint" aria-hidden="true">Desliza → para aprobar · ← para pedir un cambio</p>
         <Section label="Cuándo" id="label-when">
@@ -1723,8 +2003,9 @@ function App({ api = realApi }) {
     <>
       <TopBar />
       <Heading eyebrow="Tu camerino">Mis <em>encargos</em></Heading>
+      {listBusy && encargos !== null && <p className="sr-only" role="status">Actualizando encargos</p>}
       {encargos === null ? <ListSkeleton /> : encargosError ? (
-        <LoadError title="No he podido cargar los encargos" detail={encargosError} onRetry={() => { setEncargos(null); setEncargosError(''); loadEncargos() }} />
+        <LoadError title="No he podido cargar los encargos" detail={encargosError} onRetry={() => { encargosRef.current = null; setEncargos(null); setEncargosError(''); loadEncargos() }} />
       ) : encargos.length === 0 ? (
         <Empty className="min-h-0 flex-none items-start rounded-2xl border border-dashed border-input p-6 text-left">
           <EmptyHeader className="items-start text-left">
@@ -1737,29 +2018,44 @@ function App({ api = realApi }) {
           </EmptyContent>
         </Empty>
       ) : (
-        <ul className="feed">
-          {encargos.map((item) => {
-            const tone = item.status === 'cancelled' || item.status === 'failed' ? 'status-pill' : undefined
-            const variant = item.status === 'ready' ? 'default' : 'secondary'
-            return (
-              <li key={item.id} className="encargo-row">
-                <button type="button" className="encargo-open" aria-busy={openingId === item.id || undefined} disabled={openingId === item.id} onClick={() => openListed(item)}>
-                  <span>
-                    <strong className="encargo-title">{encargoTitle(item)}</strong>
-                    <FitSummary item={item} />
-                    <span>
-                      {(me?.accounts.length ?? 0) > 1 && `${item.account_name ?? account?.name ?? 'Cuenta'} · `}
-                      Actualizado {formatWhen(item.updated_at ?? item.created_at, timeZone)}
-                    </span>
-                  </span>
-                  {openingId === item.id && <LoaderCircle className="spin" aria-hidden="true" />}
-                  <Badge variant={variant} className={tone}>{statusLabel(item.status)}</Badge>
-                </button>
-                <CancelEncargoAction encargo={item} busy={busy} onConfirm={() => cancelListed(item)} />
-              </li>
-            )
-          })}
-        </ul>
+        <>
+        <ToggleGroup type="single" className="lane-strip" value={lane} onValueChange={(value) => { if (value) { tap(); setLane(value) } }} aria-label="Estado">
+          {LANES.map((item) => (
+            <ToggleGroupItem key={item.id} value={item.id} className="chip lane-chip">{item.label}</ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        {(() => {
+          const visible = lane === 'todos' ? encargos : encargos.filter((item) => encargoLane(item) === lane)
+          if (!visible.length) {
+            return <p className="fine">Nada en este estado por ahora.</p>
+          }
+          return (
+            <ul className="feed">
+              {visible.map((item) => {
+                const tone = item.status === 'cancelled' || item.status === 'failed' ? 'status-pill' : undefined
+                const variant = item.status === 'ready' ? 'default' : 'secondary'
+                return (
+                  <li key={item.id} className="encargo-row">
+                    <button type="button" className="encargo-open" aria-busy={openingId === item.id || undefined} disabled={openingId === item.id} onClick={() => openListed(item)}>
+                      <span>
+                        <strong className="encargo-title">{encargoTitle(item)}</strong>
+                        <FitSummary item={item} />
+                        <span>
+                          {(me?.accounts.length ?? 0) > 1 && `${item.account_name ?? account?.name ?? 'Cuenta'} · `}
+                          Actualizado {formatWhen(item.updated_at ?? item.created_at, timeZone)}
+                        </span>
+                      </span>
+                      {openingId === item.id && <LoaderCircle className="spin" aria-hidden="true" />}
+                      <Badge variant={variant} className={tone}>{statusLabel(item.status)}</Badge>
+                    </button>
+                    <CancelEncargoAction encargo={item} busy={busy} onConfirm={() => cancelListed(item)} />
+                  </li>
+                )
+              })}
+            </ul>
+          )
+        })()}
+        </>
       )}
       <ErrorLine>{error}</ErrorLine>
     </>
@@ -1814,15 +2110,60 @@ function App({ api = realApi }) {
       <Section label="Cuentas" id="label-accounts">
         <ul className="feed">
           {me?.accounts.map((item) => (
-            <li key={item.id} data-pending={item.pending ? 'true' : undefined}>
-              <button type="button" className="account-open" disabled={item.pending} aria-pressed={item.id === accountId} onClick={() => { tap(); setAccountId(item.id) }}>
-                <span className="avatar" aria-hidden="true">{item.name.slice(0, 1).toUpperCase()}</span>
-                <span><strong>{item.name}</strong><span>{item.pending ? 'Creando…' : `Racha de ${days(streaks[item.id] ?? 0)}`}</span></span>
-                {item.id === accountId && <Check aria-hidden="true" />}
-              </button>
+            <li key={item.id} className="account-row" data-pending={item.pending ? 'true' : undefined}>
+              {renamingId === item.id ? (
+                <form className="inline-form account-rename" onSubmit={saveAccountName}>
+                  <FieldLabel htmlFor={`rename-${item.id}`} className="sr-only">Nuevo nombre de {item.name}</FieldLabel>
+                  <input id={`rename-${item.id}`} className="input" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} autoFocus />
+                  <Button type="submit" variant="outline" disabled={!renameDraft.trim()}>Guardar</Button>
+                  <Button type="button" variant="ghost" onClick={() => setRenamingId(null)}>Cancelar</Button>
+                </form>
+              ) : (
+                <button type="button" className="account-open" disabled={item.pending} aria-pressed={item.id === accountId} onClick={() => { tap(); setAccountId(item.id) }}>
+                  <span className="avatar" aria-hidden="true">{item.name.slice(0, 1).toUpperCase()}</span>
+                  <span><strong>{item.name}</strong><span>{item.pending ? 'Creando…' : `Racha de ${days(streaks[item.id] ?? 0)}`}</span></span>
+                  {item.id === accountId && <Check aria-hidden="true" />}
+                </button>
+              )}
+              {!item.pending && renamingId !== item.id && archivingId !== item.id && (
+                <div className="account-actions">
+                  <button type="button" className="account-action" aria-label={`Renombrar ${item.name}`} onClick={() => { tap(); setArchivingId(null); setRenamingId(item.id); setRenameDraft(item.name) }}>Renombrar</button>
+                  <button type="button" className="account-action account-action-quiet" aria-label={`Archivar ${item.name}`} onClick={() => { tap(); setRenamingId(null); setArchivingId(item.id) }}>Archivar</button>
+                </div>
+              )}
+              {archivingId === item.id && (
+                <div className="cancel-confirm" role="alertdialog" aria-labelledby={`archive-${item.id}`}>
+                  <p id={`archive-${item.id}`} className="cancel-confirm-title">¿Archivar «{item.name}»?</p>
+                  <p className="fine">Dejará de salir al elegir cuenta. Los encargos que ya tiene siguen en la lista.</p>
+                  <div className="cancel-confirm-actions">
+                    <Button variant="outline" className="cta-secondary" onClick={() => setArchivingId(null)}>No, dejarla</Button>
+                    <Button variant="destructive" className="cta-secondary" onClick={() => confirmArchive(item)}>Sí, archivar</Button>
+                  </div>
+                </div>
+              )}
             </li>
           ))}
         </ul>
+        <button type="button" className="account-action account-archived-toggle" aria-expanded={showArchived} onClick={toggleArchived}>
+          {showArchived ? 'Ocultar archivadas' : 'Ver archivadas'}
+        </button>
+        {showArchived && (
+          archivedAccounts === null ? <ListSkeleton /> : archivedAccounts.length === 0 ? (
+            <p className="fine">No hay cuentas archivadas.</p>
+          ) : (
+            <ul className="feed archived-list">
+              {archivedAccounts.map((item) => (
+                <li key={item.id} className="account-row">
+                  <span className="account-open" aria-hidden="true">
+                    <span className="avatar">{item.name.slice(0, 1).toUpperCase()}</span>
+                    <span><strong>{item.name}</strong><span>Archivada</span></span>
+                  </span>
+                  <button type="button" className="account-action" onClick={() => restoreArchived(item)}>Restaurar {item.name}</button>
+                </li>
+              ))}
+            </ul>
+          )
+        )}
         <form className="inline-form" onSubmit={addAccount}>
           <FieldLabel htmlFor="account-name" className="sr-only">Nombre de la cuenta</FieldLabel>
           <input id="account-name" className="input" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Nueva cuenta" />

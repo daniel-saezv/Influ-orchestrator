@@ -181,7 +181,7 @@ export default {
           try { personBody = JSON.parse(new TextDecoder().decode(personBytes)); } catch { throw err('INVALID_JSON', 'Cuerpo JSON inválido', 400); }
         }
         const data = await dispatchPerson(personCtx.repo, {
-          method: request.method, pathname: url.pathname, body: personBody, email, now, r2: personCtx.r2,
+          method: request.method, pathname: url.pathname, searchParams: url.searchParams, body: personBody, email, now, r2: personCtx.r2,
           dispatchBatch: (batchId) => dispatch({ batchId, trigger: 'schedule-now' }, personCtx),
         });
         const status = data?.__http ?? 200;

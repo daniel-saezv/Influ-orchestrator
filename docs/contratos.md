@@ -105,6 +105,20 @@ JSON `{ "sha256": "hex del archivo entero" }`. Exige todas las partes. No llama 
 
 `:sha256` es el hex de un asset de una cuenta de ese correo (cada parte y cada pieza tienen el suyo). El SHA del archivo entero, si no coincide con un objeto, no devuelve bytes. El cuerpo de la respuesta 200 son los bytes, sin envoltura JSON. Cabeceras: `content-type` del asset, `content-length`, `x-content-sha256`, `etag` con esa huella y `cache-control: private, max-age=31536000, immutable`. Si `If-None-Match` coincide, responde 304 sin leer R2 ni gastar clase B. Si R2 guardó `checksums.sha256`, tiene que coincidir con la huella. Una pieza subida por URL prefirmada no trae ese checksum: se acepta si `checksums.md5` coincide con el MD5 guardado en la reserva, y `x-content-sha256` es el SHA-256 que el bot declaró al pedir la URL. R2 comprobó el MD5, no ese SHA-256. La lectura 200 cuesta una operación de clase B. Un asset pendiente de borrado responde 404. El 404 y el resto de errores siguen siendo JSON.
 
+## Cuentas de la persona
+
+`GET /v1/me` sigue devolviendo solo las cuentas activas (`archived_at` vacío), con `account_id`, `name` y `streak_days`.
+
+| Método y ruta | Cuerpo | Respuesta correcta |
+|---|---|---|
+| `GET /v1/me/accounts` | vacío | 200 y las cuentas activas |
+| `GET /v1/me/accounts?archived=1` | vacío | 200 y solo las archivadas |
+| `PATCH /v1/me/accounts/:id` | `{ "name": "…" }` | 200 y la cuenta renombrada |
+| `POST /v1/me/accounts/:id/archive` | vacío o `{}` | 200 y `archived_at` |
+| `POST /v1/me/accounts/:id/restore` | vacío o `{}` | 200 y `archived_at: null` |
+
+El cuerpo de cada cuenta en estas rutas es `{ "account_id", "name", "archived_at" }`. Archivar dos veces conserva el primer `archived_at`. Restaurar una cuenta activa no cambia la fila. Una cuenta de otro correo, o un id que no existe, es 404 `NOT_FOUND`. Crear un encargo en una cuenta archivada es 409 `CONFLICT`. Los encargos ya abiertos de esa cuenta siguen en `GET /v1/me/encargos`.
+
 ## Listado de encargos de la persona
 
 `GET /v1/me/encargos`. JWT de Access, el mismo aislamiento que el resto de `/v1/me`: solo los encargos de las cuentas de ese correo, del más reciente al más antiguo, como máximo 100. `200`:
@@ -123,7 +137,7 @@ Cada ítem lleva `preview` solo si existe una pieza entregable de la versión ac
 
 `POST /v1/me/uploads/:id/release` lo usa la persona para quitar una subida propia mientras el encargo sigue en `draft` o `queued`. Borra las partes en R2, las filas de origen de esa sesión y la sesión, y suelta los bytes. Si no queda origen, el encargo vuelve a `draft`. Otro correo es 404. Un encargo ya reclamado, fallido o posterior es 409. No devuelve URLs.
 
-`status` es el de D1 (`draft`, `queued`, `claimed`, `ready`, `approved`, `scheduled`, `cancelled`, `failed`). Otro correo recibe una lista vacía, no los ajenos. Un service token responde 403 `ACCESS_DENIED`.
+`status` es el de D1 (`draft`, `queued`, `claimed`, `ready`, `approved`, `scheduled`, `cancelled`, `failed`). La UI agrupa ese listado en el teléfono, sin un filtro en el servidor: en curso (`draft`, `queued`, `claimed`, `preparing`, `failed`), listo (`ready`, `approved`), programado (`scheduled` con `publish_at` más de un minuto en el futuro), publicado (`scheduled` sin esa fecha futura) y cancelado (`cancelled`). Otro correo recibe una lista vacía, no los ajenos. Un service token responde 403 `ACCESS_DENIED`.
 
 ## API del bot (encargos)
 

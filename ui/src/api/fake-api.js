@@ -171,7 +171,7 @@ function touch(encargo) {
 }
 
 function publicAccount(account) {
-  return { id: account.id, name: account.name }
+  return { id: account.id, name: account.name, archived_at: account.archived_at ?? null }
 }
 
 function currentUser() {
@@ -206,7 +206,7 @@ function publicUser(user) {
     guide_required: !user.guide_seen_at,
     needs_guide: !user.guide_seen_at,
     accounts: [...state.accounts.values()]
-      .filter((account) => account.user_id === user.id)
+      .filter((account) => account.user_id === user.id && !account.archived_at)
       .map(publicAccount),
   }
 }
@@ -259,6 +259,35 @@ async function updateAccount(accountId, input = {}) {
   return success(publicAccount(account))
 }
 
+async function listOwnedAccounts(_input, _params, search = '') {
+  await sleep()
+  const archived = new URLSearchParams(search).get('archived')
+  const wantArchived = archived === '1' || archived === 'true'
+  const userId = currentUser()?.id
+  const accounts = [...state.accounts.values()].filter((account) => account.user_id === userId && Boolean(account.archived_at) === wantArchived)
+  return success({ accounts: accounts.map(publicAccount) })
+}
+
+async function archiveAccount(accountId) {
+  await sleep()
+  const account = requireUserAccount(accountId)
+  if (!account) return missing()
+  if (!account.archived_at) account.archived_at = tick()
+  return success(publicAccount(account))
+}
+
+async function restoreAccount(accountId) {
+  await sleep()
+  const account = requireUserAccount(accountId)
+  if (!account) return missing()
+  account.archived_at = null
+  return success(publicAccount(account))
+}
+
+function listArchivedAccounts() {
+  return listOwnedAccounts({}, {}, 'archived=1')
+}
+
 function selectionError(input) {
   const allowed = FORMAT_TARGETS[input.format]
   if (!allowed) return 'Elige un formato.'
@@ -277,6 +306,7 @@ async function createEncargo(input = {}) {
   await sleep()
   const account = requireUserAccount(input.account_id ?? input.accountId)
   if (!account) return missing()
+  if (account.archived_at) return failure(409, 'CONFLICT', 'La cuenta está archivada')
   const kind = input.kind === 'edit' ? 'edit' : 'from_scratch'
   const note = String(input.note ?? input.idea ?? '').trim()
   const invalid = selectionError(input)
@@ -670,7 +700,10 @@ export const routes = {
   'POST /v1/me': (body) => createMe(body),
   'PATCH /v1/me': (body) => updateMe(body),
   'POST /v1/me/accounts': (body) => createAccount(body),
+  'GET /v1/me/accounts': (body, params, search) => listOwnedAccounts(body, params, search),
   'PATCH /v1/me/accounts/:id': (body, params) => updateAccount(params.id, body),
+  'POST /v1/me/accounts/:id/archive': (_body, params) => archiveAccount(params.id),
+  'POST /v1/me/accounts/:id/restore': (_body, params) => restoreAccount(params.id),
   'POST /v1/me/encargos': (body) => createEncargo(body),
   'GET /v1/me/encargos': () => listEncargos(),
   'POST /v1/me/uploads': (body) => createUpload(body),
@@ -710,9 +743,10 @@ function matchRoute(method, path) {
 
 export async function request(path, options = {}) {
   const method = String(options.method ?? 'GET').toUpperCase()
-  const matched = matchRoute(method, path)
+  const [pathname, search = ''] = String(path).split('?')
+  const matched = matchRoute(method, pathname)
   if (!matched) return failure(404, 'ROUTE_NOT_FOUND', `No existe ${method} ${path}.`)
-  return matched.handler(options.body ?? {}, matched.params)
+  return matched.handler(options.body ?? {}, matched.params, search)
 }
 
 async function get(path, options) { return request(path, { ...options, method: 'GET' }) }
@@ -731,6 +765,9 @@ export const fakeApi = {
   updateMe,
   createAccount,
   updateAccount,
+  archiveAccount,
+  restoreAccount,
+  listArchivedAccounts,
   createEncargo,
   listEncargos,
   createUpload,
@@ -753,6 +790,9 @@ export {
   updateMe,
   createAccount,
   updateAccount,
+  archiveAccount,
+  restoreAccount,
+  listArchivedAccounts,
   createEncargo,
   listEncargos,
   createUpload,

@@ -112,6 +112,27 @@ export async function updateAccount(accountId, body) {
   )
 }
 
+export async function archiveAccount(accountId) {
+  return mapResponse(
+    await request(`/v1/me/accounts/${encoded(accountId)}/archive`, { method: 'POST' }),
+    mapAccount,
+  )
+}
+
+export async function restoreAccount(accountId) {
+  return mapResponse(
+    await request(`/v1/me/accounts/${encoded(accountId)}/restore`, { method: 'POST' }),
+    mapAccount,
+  )
+}
+
+export async function listArchivedAccounts() {
+  return mapResponse(await request('/v1/me/accounts?archived=1'), (data) => ({
+    ...data,
+    accounts: (data.accounts ?? []).map(mapAccount),
+  }))
+}
+
 export async function createEncargo(body) {
   return mapResponse(await request('/v1/me/encargos', { method: 'POST', body }), mapEncargo)
 }
@@ -255,6 +276,9 @@ export const api = {
   updateMe,
   createAccount,
   updateAccount,
+  archiveAccount,
+  restoreAccount,
+  listArchivedAccounts,
   createEncargo,
   listEncargos,
   createUpload,

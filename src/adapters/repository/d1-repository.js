@@ -196,18 +196,20 @@ export class D1Repository {
     return this.db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
   }
 
-  async listAccounts(userId) {
-    const r = await this.db.prepare(`SELECT a.account_id, a.name, s.count AS streak_count, s.last_civil_day
+  async listAccounts(userId, { archived = false } = {}) {
+    const archivedClause = archived ? 'a.archived_at IS NOT NULL' : 'a.archived_at IS NULL';
+    const order = archived ? 'a.archived_at DESC' : 'a.created_at';
+    const r = await this.db.prepare(`SELECT a.account_id, a.name, a.archived_at, s.count AS streak_count, s.last_civil_day
       FROM accounts a LEFT JOIN streaks s ON s.account_id = a.account_id
-      WHERE a.user_id = ? ORDER BY a.created_at`).bind(userId).all();
+      WHERE a.user_id = ? AND ${archivedClause} ORDER BY ${order}`).bind(userId).all();
     return r.results;
   }
 
   async saveGuide(userId, { displayName, timeZone, now }) {
     await this.db.prepare('UPDATE users SET display_name = ?, time_zone = ?, guide_seen_at = COALESCE(guide_seen_at, ?), updated_at = ? WHERE user_id = ?')
       .bind(displayName, timeZone, now, now, userId).run();
-    const accounts = await this.listAccounts(userId);
-    if (accounts.length === 0) {
+    const existing = await this.db.prepare('SELECT account_id FROM accounts WHERE user_id = ? LIMIT 1').bind(userId).first();
+    if (!existing) {
       const accountId = crypto.randomUUID();
       await this.db.prepare('INSERT INTO accounts (account_id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
         .bind(accountId, userId, displayName, now, now).run();
@@ -225,7 +227,7 @@ export class D1Repository {
   }
 
   async ownedAccount(email, accountId) {
-    return this.db.prepare(`SELECT a.account_id, a.user_id, a.name, u.email, u.time_zone, u.guide_seen_at
+    return this.db.prepare(`SELECT a.account_id, a.user_id, a.name, a.archived_at, u.email, u.time_zone, u.guide_seen_at
       FROM accounts a JOIN users u ON u.user_id = a.user_id
       WHERE a.account_id = ? AND u.email = ?`).bind(accountId, email).first();
   }
@@ -239,7 +241,12 @@ export class D1Repository {
 
   async renameAccount(accountId, name, now) {
     await this.db.prepare('UPDATE accounts SET name = ?, updated_at = ? WHERE account_id = ?').bind(name, now, accountId).run();
-    return { account_id: accountId, name };
+    return this.db.prepare('SELECT account_id, name, archived_at FROM accounts WHERE account_id = ?').bind(accountId).first();
+  }
+
+  async setAccountArchived(accountId, archivedAt, now) {
+    await this.db.prepare('UPDATE accounts SET archived_at = ?, updated_at = ? WHERE account_id = ?').bind(archivedAt, now, accountId).run();
+    return this.db.prepare('SELECT account_id, name, archived_at FROM accounts WHERE account_id = ?').bind(accountId).first();
   }
 
   async insertEncargo({ accountId, kind, note, status, platforms, format, targets, now }) {

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../src/App.jsx'
@@ -20,6 +20,7 @@ describe('mobile creation flow', () => {
     delete document.documentElement.dataset.theme
     window.history.replaceState({}, '', '/')
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    vi.unstubAllGlobals()
   })
 
   it('guides a first-time user from the idea to three MOCK platforms and activity', async () => {
@@ -139,8 +140,8 @@ describe('mobile creation flow', () => {
     expect(await screen.findByText('Cuenta «Segunda» lista')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /^Alex/ }))
     expect(screen.getByRole('button', { name: /^Alex/ })).toHaveAttribute('aria-pressed', 'true')
-    await user.click(screen.getByRole('button', { name: /Segunda/ }))
-    expect(screen.getByRole('button', { name: /Segunda/ })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: /^Segunda/ }))
+    expect(screen.getByRole('button', { name: /^Segunda/ })).toHaveAttribute('aria-pressed', 'true')
 
     await user.click(screen.getByRole('radio', { name: 'Oscuro' }))
     expect(document.documentElement.dataset.theme).toBe('dark')
@@ -197,7 +198,7 @@ describe('mobile creation flow', () => {
     await user.click(screen.getByRole('button', { name: 'Mis encargos' }))
     await user.click(await screen.findByRole('button', { name: 'Cancelar encargo' }))
     await user.click(screen.getByRole('button', { name: 'Sí, cancelar' }))
-    expect(await screen.findByText('Cancelado')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Una toma para mañana/ })).toHaveTextContent('Cancelado')
     expect(screen.queryByRole('button', { name: 'Cancelar encargo' })).not.toBeInTheDocument()
     expect(getFakeApiState().encargos.at(-1).status).toBe('cancelled')
   })
@@ -226,6 +227,7 @@ describe('mobile creation flow', () => {
     await user.click(screen.getByRole('button', { name: 'Preparar' }))
     expect(await screen.findByRole('img', { name: 'Pieza de audio anterior' })).toBeInTheDocument()
     expect(document.querySelector('audio')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Ver la previa a pantalla completa' })).not.toBeInTheDocument()
   })
 
   it('truncates a long encargo title without hiding cancel on narrow layouts', async () => {
@@ -303,6 +305,185 @@ describe('mobile creation flow', () => {
     expect(await screen.findByText('No he podido cargar los encargos')).toBeInTheDocument()
     expect(screen.getByText('No he podido leer los encargos.')).toBeInTheDocument()
     expect(screen.queryByText('Todavía no tienes encargos')).not.toBeInTheDocument()
+  })
+
+  it('opens the 9:16 preview full screen and closes it from the button, Escape or a downward swipe', async () => {
+    resetFakeApi({ onboarded: true })
+    configureFakeApi({ transitionReads: 0.5, previewMime: 'image/jpeg' })
+    const user = userEvent.setup()
+    render(<App api={fakeApi} />)
+    await user.type(await screen.findByLabelText('Tu idea'), 'Una foto para ampliar')
+    await chooseFormat(user, 'Foto', ['Instagram Feed'])
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    await user.click(await screen.findByRole('button', { name: 'Ver la previa a pantalla completa' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Previa a pantalla completa' })
+    expect(within(dialog).getByRole('img', { name: 'Previa del encargo' })).toHaveClass('stage-media-fit')
+    expect(within(dialog).getByText('Desliza hacia abajo para cerrar')).toBeInTheDocument()
+    fireEvent.touchStart(dialog, { touches: [{ clientX: 40, clientY: 30 }] })
+    fireEvent.touchEnd(dialog, { changedTouches: [{ clientX: 36, clientY: 180 }] })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Previa a pantalla completa' })).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Ver la previa a pantalla completa' }))
+    expect(await screen.findByRole('dialog', { name: 'Previa a pantalla completa' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Previa a pantalla completa' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Ver la previa a pantalla completa' }))
+    await user.click(await screen.findByRole('button', { name: 'Cerrar previa' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('opens a video preview full screen with its own player', async () => {
+    resetFakeApi({ onboarded: true })
+    configureFakeApi({ transitionReads: 0.5, previewMime: 'video/mp4' })
+    const user = userEvent.setup()
+    render(<App api={fakeApi} />)
+    await user.type(await screen.findByLabelText('Tu idea'), 'Un vídeo para ampliar')
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    await user.click(await screen.findByRole('button', { name: 'Ver la previa a pantalla completa' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Previa a pantalla completa' })
+    const video = dialog.querySelector('video')
+    expect(video).toBeTruthy()
+    expect(video).toHaveAttribute('playsinline')
+    expect(video).toHaveAttribute('controls')
+    await user.click(within(dialog).getByRole('button', { name: 'Cerrar previa' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('filters encargos by the real status groups', async () => {
+    resetFakeApi({ onboarded: true })
+    configureFakeApi({ transitionReads: 100 })
+    const user = userEvent.setup()
+    render(<App api={fakeApi} />)
+    await user.click(await screen.findByRole('button', { name: 'Mis encargos' }))
+    await user.click(screen.getByRole('button', { name: 'Preparar el primero' }))
+    await user.type(screen.getByLabelText('Tu idea'), 'Sigue en cola')
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    await user.click(await screen.findByRole('button', { name: 'Mis encargos' }))
+    expect(await screen.findByRole('button', { name: /Sigue en cola/ })).toBeInTheDocument()
+    await user.click(screen.getByRole('radio', { name: 'Listo' }))
+    expect(screen.getByText('Nada en este estado por ahora.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Sigue en cola/ })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('radio', { name: 'En curso' }))
+    expect(screen.getByRole('button', { name: /Sigue en cola/ })).toHaveTextContent('En cola')
+    await user.click(screen.getByRole('radio', { name: 'Todos' }))
+    expect(screen.getByRole('button', { name: /Sigue en cola/ })).toBeInTheDocument()
+  })
+
+  it('keeps the loaded encargos list while it revalidates', async () => {
+    resetFakeApi({ onboarded: true })
+    configureFakeApi({ transitionReads: 100 })
+    const user = userEvent.setup()
+    let hold = false
+    let release = () => {}
+    const api = {
+      ...fakeApi,
+      listEncargos: async (...args) => {
+        const result = await fakeApi.listEncargos(...args)
+        if (hold) await new Promise((resolve) => { release = resolve })
+        return result
+      },
+    }
+    render(<App api={api} />)
+    await user.click(await screen.findByRole('button', { name: 'Mis encargos' }))
+    await user.click(screen.getByRole('button', { name: 'Preparar el primero' }))
+    await user.type(screen.getByLabelText('Tu idea'), 'Lista que se queda')
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    await user.click(await screen.findByRole('button', { name: 'Mis encargos' }))
+    expect(await screen.findByRole('button', { name: /Lista que se queda/ })).toBeInTheDocument()
+    hold = true
+    await user.click(screen.getByRole('button', { name: 'Estudio' }))
+    await user.click(screen.getByRole('button', { name: 'Encargos' }))
+    expect(screen.getByRole('button', { name: /Lista que se queda/ })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Cargando')).not.toBeInTheDocument()
+    expect(screen.getByText('Actualizando encargos')).toBeInTheDocument()
+    release()
+    await waitFor(() => expect(screen.queryByText('Actualizando encargos')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /Lista que se queda/ })).toBeInTheDocument()
+  })
+
+  it('tells the person in the app and in the browser when a take becomes ready', async () => {
+    resetFakeApi({ onboarded: true })
+    configureFakeApi({ transitionReads: 0.5 })
+    const notes = []
+    class FakeNotification {
+      static permission = 'granted'
+      static requestPermission = vi.fn(async () => 'granted')
+      constructor(title, options) {
+        notes.push({ title, options })
+      }
+      close() {}
+    }
+    vi.stubGlobal('Notification', FakeNotification)
+    const user = userEvent.setup()
+    render(<App api={fakeApi} />)
+    await user.type(await screen.findByLabelText('Tu idea'), 'Aviso de toma')
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    expect(await screen.findByRole('heading', { name: 'Mira lo que he preparado' })).toBeInTheDocument()
+    expect(await screen.findByText('«Aviso de toma» está lista')).toBeInTheDocument()
+    expect(notes).toHaveLength(1)
+    expect(notes[0].options).toEqual({ body: '«Aviso de toma» está lista', tag: expect.stringMatching(/^encargo-ready-/) })
+    expect(JSON.stringify(notes[0])).not.toMatch(/https?:|\/v1\/me\/media|signature|X-Amz-/i)
+  })
+
+  it('asks for browser notices from the preparing screen and can dismiss the ask', async () => {
+    resetFakeApi({ onboarded: true })
+    configureFakeApi({ transitionReads: 100 })
+    class FakeNotification {
+      static permission = 'default'
+      static requestPermission = vi.fn(async () => 'granted')
+    }
+    vi.stubGlobal('Notification', FakeNotification)
+    const user = userEvent.setup()
+    const { unmount } = render(<App api={fakeApi} />)
+    await user.type(await screen.findByLabelText('Tu idea'), 'Quiero un aviso')
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    expect(await screen.findByRole('button', { name: 'Avisarme cuando esté lista' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Ahora no' }))
+    expect(screen.queryByRole('button', { name: 'Avisarme cuando esté lista' })).not.toBeInTheDocument()
+    expect(FakeNotification.requestPermission).not.toHaveBeenCalled()
+    unmount()
+    localStorage.clear()
+    FakeNotification.permission = 'default'
+    window.history.replaceState({}, '', '/')
+    render(<App api={fakeApi} />)
+    await user.click(await screen.findByRole('button', { name: 'Estudio' }))
+    await user.type(screen.getByLabelText('Tu idea'), 'Ahora sí')
+    await chooseFormat(user, 'Vídeo corto', ['YouTube Short'])
+    await user.click(screen.getByRole('button', { name: 'Preparar' }))
+    await user.click(await screen.findByRole('button', { name: 'Avisarme cuando esté lista' }))
+    expect(FakeNotification.requestPermission).toHaveBeenCalledOnce()
+  })
+
+  it('renames and archives an account without leaving it in the studio', async () => {
+    resetFakeApi({ onboarded: true })
+    const user = userEvent.setup()
+    render(<App api={fakeApi} />)
+    await user.click(await screen.findByRole('button', { name: 'Tú' }))
+    await user.click(screen.getByRole('button', { name: 'Renombrar Alex Studio' }))
+    const field = screen.getByLabelText('Nuevo nombre de Alex Studio')
+    await user.clear(field)
+    await user.type(field, 'Alex principal')
+    await user.click(within(field.closest('form')).getByRole('button', { name: 'Guardar' }))
+    expect(await screen.findByText('Nombre de la cuenta guardado')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Archivar Alex principal' }))
+    await user.click(screen.getByRole('button', { name: 'Sí, archivar' }))
+    expect(await screen.findByText('«Alex principal» archivada')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Alex principal/ })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Ver archivadas' }))
+    expect(await screen.findByRole('button', { name: 'Restaurar Alex principal' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Estudio' }))
+    expect(screen.queryByRole('radio', { name: /Alex principal/ })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Tú' }))
+    await user.click(await screen.findByRole('button', { name: 'Restaurar Alex principal' }))
+    expect(await screen.findByText('«Alex principal» otra vez activa')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Estudio' }))
+    expect(screen.getByRole('radio', { name: /Alex principal/ })).toBeInTheDocument()
   })
 
   it('keeps chosen files when leaving the form and lets you remove them', async () => {
